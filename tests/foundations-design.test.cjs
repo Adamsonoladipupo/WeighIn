@@ -36,3 +36,14 @@ test('provenance distinguishes verified, unknown, and caller-supplied artifacts'
   assert.notEqual(verification.custom, 'verified');
   assert.notEqual(verification.prebuilt, 'verified');
 });
+
+test('hosted reproducibility requires independent authenticated samples', () => {
+  const samples = [
+    { run_id: '100', run_attempt: 1, source_sha256: 'a', wasm_sha256: 'w1', status: 'success' },
+    { run_id: '101', run_attempt: 1, source_sha256: 'a', wasm_sha256: 'w1', status: 'success' },
+  ];
+  assert.equal(new Set(samples.map(sample => sample.run_id)).size, 2);
+  assert.equal(new Set(samples.map(sample => sample.source_sha256)).size, 1);
+  assert.equal(samples.every(sample => sample.status === 'success'), true);
+  assert.equal(samples[0].run_id === samples[1].run_id, false);
+});

@@ -1,8 +1,9 @@
-# Policy selectors, build provenance, and payload bounds
+# Policy selectors, build provenance, hosted reproducibility, and payload bounds
 
-This document is the design/prototype deliverable for issues #40, #41, and
-#44. It deliberately does not change the production policy wire format,
-measurement result schema, or transport behavior before maintainer review.
+This document is the design/prototype deliverable for issues #40, #41, #42,
+and #44. It deliberately does not change the production policy wire format,
+measurement result schema, hosted workflow behavior, or transport behavior
+before maintainer review.
 
 ## Issue #40: structured logical selectors
 
@@ -76,6 +77,35 @@ the provenance field is absent. Differing provenance is informational by
 default; a future explicit compatibility policy may require matching verified
 provenance, in which case comparison fails closed rather than mixing values.
 Archived evidence is not rewritten.
+
+## Issue #42: hosted clean-build reproducibility
+
+The hosted proof must use separate workflow runs/attempts, not two jobs in one
+run relabeled as independent samples. The proposed bounded matrix is two
+`ubuntu-24.04` executions with the same immutable source revision, fixture
+snapshot, lockfile, Rust 1.95.0 toolchain/target, checksum-verified Stellar CLI,
+Node/npm versions, optimizer flags, and standalone protocol image. Each run:
+
+1. starts with a fresh contract target directory;
+2. records runner image, tool versions, environment controls, source/input
+   hashes, and the authenticated workflow run/attempt/revision tuple;
+3. builds the same selected artifacts and records exact bytes, sizes, and
+   SHA-256 values;
+4. uploads a minimal sanitized evidence bundle containing only the manifest,
+   checksums, process outcomes, and artifact metadata.
+
+The verifier accepts a reproducibility result only when both runs completed,
+all required artifacts exist, source/tool/input associations match, and each
+reported WASM hash matches its bytes. It reports byte equality or the actual
+per-artifact differences. Missing artifacts, failed builds, stale outputs,
+forged source associations, or incompatible tool settings are invalid evidence,
+not a reproducibility failure and not a pass. Existing local repeatability
+evidence remains valid but is not relabeled as hosted evidence.
+
+The workflow should be manually dispatchable and gated from becoming a required
+red check until maintainers approve its cost and artifact-retention policy.
+The proof is scoped to the selected Linux image/toolchain; it makes no
+cross-machine or universal determinism claim.
 
 ## Issue #44: bounded payloads
 
