@@ -70,6 +70,13 @@ private deployer key is shared across BASE/HEAD in a private temporary file.
 `src/account.ts::ensureAccountReady` checks RPC account inclusion and uses local
 Friendbot when necessary. The current path assumes the standalone passphrase.
 
+`src/endpoint.ts` is the shared diagnostic policy for the configured endpoint.
+CLI, Action and transport (`src/account.ts`, `src/simulation.ts`) diagnostics run
+URLs through it: scheme/host/port/path are preserved, userinfo is stripped, query
+values are redacted while keys remain, and fragments are dropped. Malformed input
+becomes `[invalid endpoint]`. The sanitized form is display-only; requests always
+use the configured endpoint unchanged.
+
 Measurement records retain `wasm_sha256`, runtime `contract_id`, revision SHA and
 logical identities separately. Runtime addresses are diagnostics, not the diff
 key. `diffBenchmarks` therefore pairs changed WASM/address cases correctly without

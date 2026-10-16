@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 import { execFile } from "child_process";
 import { Keypair, Transaction, xdr } from "@stellar/stellar-sdk";
 import { z } from "zod";
@@ -317,8 +318,11 @@ class RpcError extends Error {
   constructor(
     readonly method: string,
     readonly rpcError: unknown,
+    rpcUrl: string,
   ) {
-    super(`RPC ${method} failed: ${JSON.stringify(rpcError)}`);
+    super(
+      `RPC ${method} failed at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(rpcError), rpcUrl)}`,
+    );
   }
 }
 
@@ -339,20 +343,30 @@ function isTransientLedgerRead(failure: unknown): boolean {
 }
 
 async function callRpc(
-  url: string,
+  rpcUrl: string,
   method: string,
   params: unknown,
 ): Promise<unknown> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`RPC ${method}: HTTP ${response.status}`);
+  let response: Response;
+  try {
+    response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    throw new Error(
+      `RPC ${method} transport failure at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String((error as any)?.message ?? error), rpcUrl)}`,
+    );
+  }
+  if (!response.ok)
+    throw new Error(
+      `RPC ${method}: HTTP ${response.status} at ${sanitizeEndpoint(rpcUrl)}`,
+    );
   const body = (await response.json()) as { error?: unknown; result?: unknown };
   if (body.error || body.result === undefined)
-    throw new RpcError(method, body.error);
+    throw new RpcError(method, body.error, rpcUrl);
   return body.result;
 }
 
