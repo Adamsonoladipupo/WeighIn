@@ -67,6 +67,12 @@ deployment salt; the address also depends on the deployer and standalone network
 ID. The same WASM may reuse a deployment; changed WASM can change the address.
 Upload and creation transactions are real submitted transactions. A generated
 private deployer key is shared across BASE/HEAD in a private temporary file.
+Submission classifies the RPC `sendTransaction` status before polling: `ERROR`
+and `TRY_AGAIN_LATER` fail immediately (no confirmation poll, no dependent
+upload/create step, and no hidden resubmission); `PENDING` or `DUPLICATE` with a
+valid hash use the existing confirmation path and must still confirm `SUCCESS`;
+any other or hash-less response fails closed. Failure diagnostics name the phase,
+status and hash instead of serializing the signed envelope or transaction result.
 `src/account.ts::ensureAccountReady` checks RPC account inclusion and uses local
 Friendbot when necessary. The current path assumes the standalone passphrase.
 
