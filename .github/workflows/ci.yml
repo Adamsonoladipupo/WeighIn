@@ -42,6 +42,8 @@ jobs:
             git diff
             exit 1
           fi
+      - name: Smoke-test packed npm artifact from clean installed consumer
+        run: node --test tests/package-smoke.test.cjs
 
   benchmark:
     name: Soroban Resource Benchmark
