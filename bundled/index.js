@@ -54075,6 +54075,17 @@ function writeReportFile(reportPathInput, headWorkspace, body) {
   }
 }
 
+// src/pr-metadata.ts
+var PR_METADATA_SCHEMA_VERSION = 1;
+function buildPrMetadata(repository, prNumber, headSha) {
+  return {
+    schemaVersion: PR_METADATA_SCHEMA_VERSION,
+    repository,
+    prNumber,
+    headSha
+  };
+}
+
 // src/action.ts
 var configuredRpcUrl = "";
 async function assertRpcHealthy(rpcUrl) {
@@ -54355,11 +54366,9 @@ async function run() {
     if (prNumber) {
       const destination = path6.resolve(headWorkspace, metadataPathInput);
       fs6.mkdirSync(path6.dirname(destination), { recursive: true });
-      fs6.writeFileSync(
-        destination,
-        JSON.stringify({ prNumber, headSha }, null, 2),
-        "utf8"
-      );
+      const { owner, repo } = context2.repo;
+      const metadata = buildPrMetadata(`${owner}/${repo}`, prNumber, headSha);
+      fs6.writeFileSync(destination, JSON.stringify(metadata, null, 2), "utf8");
     }
   }
   if (githubToken) {

@@ -11,6 +11,7 @@ import { loadConfig, enforceThresholds, Violation } from "./threshold";
 import { renderComment } from "./comment";
 import { buildForRevision } from "./build-selection";
 import { writeReportFile } from "./report";
+import { buildPrMetadata } from "./pr-metadata";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 
 // The configured endpoint is tracked only so the terminal failure path can
@@ -395,11 +396,9 @@ async function run(): Promise<void> {
     if (prNumber) {
       const destination = path.resolve(headWorkspace, metadataPathInput);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(
-        destination,
-        JSON.stringify({ prNumber, headSha }, null, 2),
-        "utf8",
-      );
+      const { owner, repo } = github.context.repo;
+      const metadata = buildPrMetadata(`${owner}/${repo}`, prNumber, headSha);
+      fs.writeFileSync(destination, JSON.stringify(metadata, null, 2), "utf8");
     }
   }
 

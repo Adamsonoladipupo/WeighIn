@@ -143,15 +143,24 @@ metric sources/caps, both revisions' provenance, deltas, additions/removals and
 violations. `src/report.ts` writes optional Markdown and PR metadata; metadata
 is written only for PR events. The same report goes to `GITHUB_STEP_SUMMARY`.
 
+The PR metadata artifact is versioned (`src/pr-metadata.ts`). The producer writes
+`schemaVersion`, the base `repository`, `prNumber` and `headSha`; a fork PR still
+records the base repository. The consumer validates the version, repository
+(case-insensitively against its trusted `github.context.repo`), positive integer
+PR number and 40-character hexadecimal SHA before any API mutation. Legacy
+unversioned metadata is explicitly rejected rather than inferred, so producer and
+consumer versions must be paired.
+
 The Action emits `result` and `diff-json` before failing a valid policy violation.
 Comparison/build/measurement/configuration errors emit `fail` and `{}`, an error
 summary, and unsuccessful execution. There is no successful no-baseline fallback.
 Optional direct-comment failure is warning-only.
 
-The separate `comment/` Action runs `bundled/comment-action.js`, reads downloaded
-report/PR metadata, and creates or updates the comment carrying
-`<!-- weighin-report -->`. It fails on missing artifacts/API failure. The example
-consumer runs only after successful PR producers, on trusted default-branch
-workflow code; it does not execute downloaded PR code. Failed policy reports
-remain in producer artifacts and summaries. Hosted expected-negative proof jobs
-separately assert genuine Action exit 1, then finish green once verified.
+The separate `comment/` Action runs `bundled/comment-action.js`, reads and
+validates downloaded report/PR metadata, and creates or updates the comment
+carrying `<!-- weighin-report -->`. It fails on missing artifacts, invalid
+metadata or API failure. The example consumer runs only after successful PR
+producers, on trusted default-branch workflow code; it does not execute
+downloaded PR code. Failed policy reports remain in producer artifacts and
+summaries. Hosted expected-negative proof jobs separately assert genuine Action
+exit 1, then finish green once verified.
