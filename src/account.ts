@@ -1,4 +1,5 @@
 import { Keypair, xdr } from "@stellar/stellar-sdk";
+import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 
 const DEADLINE_MS = 120_000;
 const REQUEST_MS = 15_000;
@@ -14,7 +15,14 @@ export async function ensureAccountReady(
   rpcUrl: string,
   publicKey: string,
 ): Promise<void> {
-  const base = new URL(rpcUrl);
+  let base: URL;
+  try {
+    base = new URL(rpcUrl);
+  } catch {
+    throw new Error(
+      `Invalid RPC URL for account readiness: ${sanitizeEndpoint(rpcUrl)}`,
+    );
+  }
   base.pathname =
     base.pathname.replace(/\/rpc\/?$/, "").replace(/\/$/, "") + "/friendbot";
   base.search = "";
@@ -57,7 +65,7 @@ export async function ensureAccountReady(
         ["TimeoutError", "AbortError"].includes(error?.name)
       ) {
         throw new TemporaryReadinessError(
-          `transport failure: ${error.message}`,
+          `transport failure at ${sanitizeEndpoint(url)}: ${redactEndpointSecrets(String(error?.message ?? error), rpcUrl)}`,
         );
       }
       throw error;
@@ -78,7 +86,7 @@ export async function ensureAccountReady(
       const json = JSON.parse(response) as any;
       if (json.error)
         throw new Error(
-          `Account readiness RPC error: ${JSON.stringify(json.error)}`,
+          `Account readiness RPC error at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(json.error), rpcUrl)}`,
         );
       const entries = json.result?.entries;
       if (

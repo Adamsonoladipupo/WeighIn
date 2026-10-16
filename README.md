@@ -138,6 +138,17 @@ Outputs: `result` is `pass` or `fail`; `diff-json` contains the comparison.
 An unsuccessful comparison emits `fail` and `{}`. A valid comparison with policy
 violations emits its real diff, writes the report, then fails the Action.
 
+### Endpoint diagnostics
+
+CLI, Action and transport diagnostics render the configured RPC endpoint through
+one shared sanitizer instead of echoing it. Scheme, host, port and path are kept;
+userinfo is stripped, every query value is replaced with `REDACTED` (keys are
+preserved) and the fragment is dropped. A malformed URL becomes a fixed
+`[invalid endpoint]` placeholder rather than the raw input. The sanitized form is
+for display only: requests still use the configured endpoint unchanged. This is
+shape-based redaction, not a guarantee about secrets embedded in the path or in
+other arbitrary text.
+
 Relative rules accept `strict_zero_tolerance`, `allow_X_percent_increase`, a
 nonnegative numeric percentage, or `ignore`. Rules are scoped by function name
 and apply to every matching contract/case with that function. Global CPU/memory

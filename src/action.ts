@@ -11,6 +11,11 @@ import { loadConfig, enforceThresholds, Violation } from "./threshold";
 import { renderComment } from "./comment";
 import { buildForRevision } from "./build-selection";
 import { writeReportFile } from "./report";
+import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
+
+// The configured endpoint is tracked only so the terminal failure path can
+// redact any credential it may contain before reporting.
+let configuredRpcUrl = "";
 
 // ---------------------------------------------------------------------------
 // RPC health check
@@ -22,7 +27,7 @@ import { writeReportFile } from "./report";
  * for starting the network before invoking this action.
  */
 async function assertRpcHealthy(rpcUrl: string): Promise<void> {
-  core.info(`Checking RPC health at ${rpcUrl} ...`);
+  core.info(`Checking RPC health at ${sanitizeEndpoint(rpcUrl)} ...`);
   try {
     const res = await fetch(rpcUrl, {
       method: "POST",
@@ -58,7 +63,7 @@ async function assertRpcHealthy(rpcUrl: string): Promise<void> {
     core.info(`RPC healthy — network: ${metadata.result.passphrase}`);
   } catch (err: any) {
     core.setFailed(
-      `Soroban RPC at ${rpcUrl} is not reachable: ${err.message}\n` +
+      `Soroban RPC at ${sanitizeEndpoint(rpcUrl)} is not reachable: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}\n` +
         `Start the network before invoking this action (e.g. via stellar/quickstart ` +
         `or scripts/start-local-network.sh), then pass its URL as the rpc-url input.`,
     );
@@ -218,6 +223,7 @@ async function run(): Promise<void> {
   const fixturesPathRel = core.getInput("fixtures-path", { required: true });
   const configPathRel = core.getInput("config-path");
   const rpcUrl = core.getInput("rpc-url") || "http://localhost:8000/rpc";
+  configuredRpcUrl = rpcUrl;
   const githubToken = core.getInput("github-token");
   const baseRefInput = core.getInput("base-ref");
   const rustToolchain = core.getInput("rust-toolchain");
@@ -236,7 +242,7 @@ async function run(): Promise<void> {
   const sharedKeyFile = path.join(os.tmpdir(), "weighin-deployer.key");
 
   core.info(`Base ref:   ${baseRef}`);
-  core.info(`RPC URL:    ${rpcUrl}`);
+  core.info(`RPC URL:    ${sanitizeEndpoint(rpcUrl)}`);
   core.info(`Fixtures:   ${fixturesPathRel}`);
   core.info(`Key file:   ${sharedKeyFile}`);
 
@@ -415,13 +421,17 @@ async function run(): Promise<void> {
 }
 
 run().catch(async (error: Error) => {
+  const message = redactEndpointSecrets(
+    String(error?.message ?? error),
+    configuredRpcUrl,
+  );
   core.setOutput("result", "fail");
   core.setOutput("diff-json", "{}");
-  core.setFailed(error.message);
+  core.setFailed(message);
   if (process.env.GITHUB_STEP_SUMMARY) {
     await core.summary
       .addRaw(
-        `## WeighIn comparison failed\n\n${error.message}\n\nNo passing comparison or policy result was established.\n`,
+        `## WeighIn comparison failed\n\n${message}\n\nNo passing comparison or policy result was established.\n`,
       )
       .write();
   }

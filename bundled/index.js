@@ -52021,6 +52021,53 @@ var RpcServer = class {
   }
 };
 
+// src/endpoint.ts
+var REDACTED_VALUE = "REDACTED";
+var INVALID_ENDPOINT = "[invalid endpoint]";
+function sanitizeEndpoint(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return INVALID_ENDPOINT;
+  }
+  url.username = "";
+  url.password = "";
+  url.hash = "";
+  const params = new URLSearchParams();
+  for (const key of url.searchParams.keys()) {
+    params.append(key, REDACTED_VALUE);
+  }
+  url.search = params.toString();
+  return url.toString();
+}
+function endpointSecrets(rawUrl) {
+  const secrets = /* @__PURE__ */ new Set();
+  try {
+    const url = new URL(rawUrl);
+    if (url.username) secrets.add(url.username);
+    if (url.password) secrets.add(url.password);
+    if (url.username || url.password) {
+      secrets.add(`${url.username}:${url.password}`);
+    }
+    for (const value of url.searchParams.values()) {
+      if (value) secrets.add(value);
+    }
+  } catch {
+  }
+  return [...secrets].filter((secret) => secret.length > 0);
+}
+function redactEndpointSecrets(message, rawUrl) {
+  let result = message;
+  if (rawUrl) result = result.split(rawUrl).join(sanitizeEndpoint(rawUrl));
+  for (const secret of endpointSecrets(rawUrl)) {
+    for (const variant of /* @__PURE__ */ new Set([secret, encodeURIComponent(secret)])) {
+      result = result.split(variant).join(REDACTED_VALUE);
+    }
+  }
+  return result;
+}
+
 // src/account.ts
 var DEADLINE_MS = 12e4;
 var REQUEST_MS = 15e3;
@@ -52029,7 +52076,14 @@ var TRANSIENT_HTTP = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var TemporaryReadinessError = class extends Error {
 };
 async function ensureAccountReady(rpcUrl, publicKey) {
-  const base = new URL(rpcUrl);
+  let base;
+  try {
+    base = new URL(rpcUrl);
+  } catch {
+    throw new Error(
+      `Invalid RPC URL for account readiness: ${sanitizeEndpoint(rpcUrl)}`
+    );
+  }
   base.pathname = base.pathname.replace(/\/rpc\/?$/, "").replace(/\/$/, "") + "/friendbot";
   base.search = "";
   base.hash = "";
@@ -52064,7 +52118,7 @@ async function ensureAccountReady(rpcUrl, publicKey) {
       if (error2 instanceof TemporaryReadinessError) throw error2;
       if (error2 instanceof TypeError || ["TimeoutError", "AbortError"].includes(error2?.name)) {
         throw new TemporaryReadinessError(
-          `transport failure: ${error2.message}`
+          `transport failure at ${sanitizeEndpoint(url)}: ${redactEndpointSecrets(String(error2?.message ?? error2), rpcUrl)}`
         );
       }
       throw error2;
@@ -52085,7 +52139,7 @@ async function ensureAccountReady(rpcUrl, publicKey) {
       const json = JSON.parse(response);
       if (json.error)
         throw new Error(
-          `Account readiness RPC error: ${JSON.stringify(json.error)}`
+          `Account readiness RPC error at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(json.error), rpcUrl)}`
         );
       const entries = json.result?.entries;
       if (!Number.isInteger(json.result?.latestLedger) || json.result.latestLedger <= 0 || !Array.isArray(entries) || entries.length > 1)
@@ -52829,8 +52883,10 @@ function snapshotLimits(entries) {
   });
 }
 var RpcError = class extends Error {
-  constructor(method, rpcError) {
-    super(`RPC ${method} failed: ${JSON.stringify(rpcError)}`);
+  constructor(method, rpcError, rpcUrl) {
+    super(
+      `RPC ${method} failed at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(rpcError), rpcUrl)}`
+    );
     this.method = method;
     this.rpcError = rpcError;
   }
@@ -52841,17 +52897,27 @@ function isTransientLedgerRead(failure) {
   const error2 = failure.rpcError;
   return error2?.code === -32603 && error2?.message === "could not query captive core: http request failed with non-200 status code (404)";
 }
-async function callRpc(url, method, params) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    signal: AbortSignal.timeout(3e4)
-  });
-  if (!response.ok) throw new Error(`RPC ${method}: HTTP ${response.status}`);
+async function callRpc(rpcUrl, method, params) {
+  let response;
+  try {
+    response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: AbortSignal.timeout(3e4)
+    });
+  } catch (error2) {
+    throw new Error(
+      `RPC ${method} transport failure at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(error2?.message ?? error2), rpcUrl)}`
+    );
+  }
+  if (!response.ok)
+    throw new Error(
+      `RPC ${method}: HTTP ${response.status} at ${sanitizeEndpoint(rpcUrl)}`
+    );
   const body = await response.json();
   if (body.error || body.result === void 0)
-    throw new RpcError(method, body.error);
+    throw new RpcError(method, body.error, rpcUrl);
   return body.result;
 }
 async function measureInvocation(rpcUrl, transaction, helperPath) {
@@ -53301,8 +53367,9 @@ Build the contract before running measurements.`
       try {
         preparedUpload = await server.prepareTransaction(uploadTx);
       } catch (err) {
-        console.error("DEBUG: Full prepareTransaction error:", err);
-        console.dir(err, { depth: null });
+        console.error(
+          `WASM upload preparation failed at ${sanitizeEndpoint(effectiveRpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), effectiveRpcUrl)}`
+        );
         throw err;
       }
       preparedUpload.sign(deployer);
@@ -54009,8 +54076,9 @@ function writeReportFile(reportPathInput, headWorkspace, body) {
 }
 
 // src/action.ts
+var configuredRpcUrl = "";
 async function assertRpcHealthy(rpcUrl) {
-  core3.info(`Checking RPC health at ${rpcUrl} ...`);
+  core3.info(`Checking RPC health at ${sanitizeEndpoint(rpcUrl)} ...`);
   try {
     const res = await fetch(rpcUrl, {
       method: "POST",
@@ -54042,7 +54110,7 @@ async function assertRpcHealthy(rpcUrl) {
     core3.info(`RPC healthy \u2014 network: ${metadata.result.passphrase}`);
   } catch (err) {
     core3.setFailed(
-      `Soroban RPC at ${rpcUrl} is not reachable: ${err.message}
+      `Soroban RPC at ${sanitizeEndpoint(rpcUrl)} is not reachable: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}
 Start the network before invoking this action (e.g. via stellar/quickstart or scripts/start-local-network.sh), then pass its URL as the rpc-url input.`
     );
     throw err;
@@ -54148,6 +54216,7 @@ async function run() {
   const fixturesPathRel = core3.getInput("fixtures-path", { required: true });
   const configPathRel = core3.getInput("config-path");
   const rpcUrl = core3.getInput("rpc-url") || "http://localhost:8000/rpc";
+  configuredRpcUrl = rpcUrl;
   const githubToken = core3.getInput("github-token");
   const baseRefInput = core3.getInput("base-ref");
   const rustToolchain = core3.getInput("rust-toolchain");
@@ -54159,7 +54228,7 @@ async function run() {
   const baseRef = baseRefInput || context2.payload.pull_request?.base?.ref || "main";
   const sharedKeyFile = path6.join(os2.tmpdir(), "weighin-deployer.key");
   core3.info(`Base ref:   ${baseRef}`);
-  core3.info(`RPC URL:    ${rpcUrl}`);
+  core3.info(`RPC URL:    ${sanitizeEndpoint(rpcUrl)}`);
   core3.info(`Fixtures:   ${fixturesPathRel}`);
   core3.info(`Key file:   ${sharedKeyFile}`);
   await assertRpcHealthy(rpcUrl);
@@ -54307,14 +54376,18 @@ async function run() {
   }
 }
 run().catch(async (error2) => {
+  const message = redactEndpointSecrets(
+    String(error2?.message ?? error2),
+    configuredRpcUrl
+  );
   core3.setOutput("result", "fail");
   core3.setOutput("diff-json", "{}");
-  core3.setFailed(error2.message);
+  core3.setFailed(message);
   if (process.env.GITHUB_STEP_SUMMARY) {
     await core3.summary.addRaw(
       `## WeighIn comparison failed
 
-${error2.message}
+${message}
 
 No passing comparison or policy result was established.
 `

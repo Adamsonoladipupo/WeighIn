@@ -3,6 +3,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { parseFixtures } from "./identity";
 import { ensureAccountReady } from "./account";
+import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 import { validateLargeInt } from "./config";
 import {
   measureInvocation,
@@ -462,8 +463,9 @@ export async function runMeasurement(
       try {
         preparedUpload = await server.prepareTransaction(uploadTx);
       } catch (err: any) {
-        console.error("DEBUG: Full prepareTransaction error:", err);
-        console.dir(err, { depth: null });
+        console.error(
+          `WASM upload preparation failed at ${sanitizeEndpoint(effectiveRpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), effectiveRpcUrl)}`,
+        );
         throw err;
       }
       preparedUpload.sign(deployer);
