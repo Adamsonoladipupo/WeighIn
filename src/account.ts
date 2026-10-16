@@ -14,7 +14,11 @@ class TemporaryReadinessError extends Error {}
 export async function ensureAccountReady(
   rpcUrl: string,
   publicKey: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    throw signal.reason || new Error("Account readiness cancelled");
+  }
   let base: URL;
   try {
     base = new URL(rpcUrl);
@@ -41,13 +45,19 @@ export async function ensureAccountReady(
     options: RequestInit = {},
   ): Promise<string> {
     try {
+      if (signal?.aborted)
+        throw signal.reason || new Error("Account readiness cancelled");
       if (Date.now() >= deadline)
         throw new TemporaryReadinessError("readiness deadline elapsed");
+      const timeoutSignal = AbortSignal.timeout(
+        Math.max(1, Math.min(REQUEST_MS, deadline - Date.now())),
+      );
+      const combinedSignal = signal
+        ? AbortSignal.any([signal, timeoutSignal])
+        : timeoutSignal;
       const response = await fetch(url, {
         ...options,
-        signal: AbortSignal.timeout(
-          Math.max(1, Math.min(REQUEST_MS, deadline - Date.now())),
-        ),
+        signal: combinedSignal,
       });
       if (!response.ok) {
         // Classify from headers even if the error body stalls.
@@ -59,6 +69,8 @@ export async function ensureAccountReady(
       }
       return await response.text();
     } catch (error: any) {
+      if (signal?.aborted)
+        throw signal.reason || new Error("Account readiness cancelled");
       if (error instanceof TemporaryReadinessError) throw error;
       if (
         error instanceof TypeError ||
@@ -72,6 +84,8 @@ export async function ensureAccountReady(
     }
   }
   while (Date.now() < deadline) {
+    if (signal?.aborted)
+      throw signal.reason || new Error("Account readiness cancelled");
     try {
       const response = await request(rpcUrl, {
         method: "POST",
@@ -119,6 +133,8 @@ export async function ensureAccountReady(
       }
       lastError = "funded account has not appeared in RPC";
     } catch (error: any) {
+      if (signal?.aborted)
+        throw signal.reason || new Error("Account readiness cancelled");
       // A response body can time out after fetch has resolved.
       if (
         !(error instanceof TemporaryReadinessError) &&
@@ -128,11 +144,26 @@ export async function ensureAccountReady(
       lastError = error.message;
       console.warn(`Account readiness retry: ${lastError}`);
     }
+    if (signal?.aborted)
+      throw signal.reason || new Error("Account readiness cancelled");
     const remaining = deadline - Date.now();
     if (remaining > 0)
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(RETRY_MS, remaining)),
-      );
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, Math.min(RETRY_MS, remaining));
+        if (signal) {
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal.reason || new Error("Account readiness cancelled"));
+          };
+          if (signal.aborted) {
+            clearTimeout(timer);
+            return reject(
+              signal.reason || new Error("Account readiness cancelled"),
+            );
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      });
   }
   throw new Error(
     `Account readiness failed within ${DEADLINE_MS / 1000}s: ${lastError}`,
