@@ -7234,8 +7234,8 @@ var require_client_h2 = __commonJS({
       this[kSocket][kError] = err;
       this[kClient][kOnError](err);
     }
-    function onHttp2FrameError(type, code, id2) {
-      if (id2 === 0) {
+    function onHttp2FrameError(type, code, id) {
+      if (id === 0) {
         const err = new InformationalError(`HTTP/2: "frameError" received - type ${type}, code ${code}`);
         this[kSocket][kError] = err;
         this[kClient][kOnError](err);
@@ -35168,36 +35168,498 @@ var coerce = {
 };
 var NEVER = INVALID;
 
+// src/diff.ts
+var METRIC_KEYS = [
+  "cpu_instructions",
+  "memory_bytes",
+  "ledger_read_entries",
+  "ledger_read_bytes",
+  "ledger_write_entries",
+  "ledger_write_bytes",
+  "historical_data_read_bytes",
+  "contract_data_hard_limit",
+  "tx_size_bytes",
+  "events_count",
+  "event_data_bytes"
+];
+function diffMetrics(base, head) {
+  return METRIC_KEYS.map((key) => {
+    const b = base?.[key];
+    const h = head?.[key];
+    for (const value of [b, h]) {
+      if (!value)
+        throw new Error(
+          `Missing metric ${key}; use an explicit unavailable record`
+        );
+      if (value.availability !== void 0 && !["measured", "unavailable"].includes(value.availability))
+        throw new Error(`Invalid metric availability ${key}`);
+      if (value.availability === "unavailable") {
+        if (value.consumed !== null || !value.reason?.trim())
+          throw new Error(`Invalid unavailable metric ${key}`);
+      } else if (value.consumed === null || !Number.isSafeInteger(value.consumed) || value.consumed < 0) {
+        throw new Error(`Invalid measured metric ${key}`);
+      }
+      if (value.limit !== null && (!Number.isSafeInteger(value.limit) || value.limit < 0))
+        throw new Error(`Invalid metric limit ${key}`);
+    }
+    if (b.consumed === null || h.consumed === null) {
+      return {
+        key,
+        base: b,
+        head: h,
+        availability: "unavailable",
+        reason: [
+          b.reason && `BASE: ${b.reason}`,
+          h.reason && `HEAD: ${h.reason}`
+        ].filter(Boolean).join("; "),
+        delta: null,
+        pct: null,
+        regression: false
+      };
+    }
+    const delta = h.consumed - b.consumed;
+    const pct = b.consumed === 0 ? null : delta / b.consumed * 100;
+    return {
+      key,
+      base: b,
+      head: h,
+      availability: "comparable",
+      delta,
+      pct,
+      regression: delta > 0
+    };
+  });
+}
+function diffFunctions(baseFns, headFns) {
+  const baseMap = benchmarkMap(baseFns);
+  const headMap = benchmarkMap(headFns);
+  const baseNames = new Set(baseFns.map((fn) => fn.function_name));
+  const headNames = new Set(headFns.map((fn) => fn.function_name));
+  const newFunctions = [...headNames].filter((name) => !baseNames.has(name));
+  const removedFunctions = [...baseNames].filter(
+    (name) => !headNames.has(name)
+  );
+  const newBenchmarks = [];
+  const removedBenchmarks = [];
+  const functions = [];
+  for (const [key, fn] of headMap) {
+    if (!baseMap.has(key)) newBenchmarks.push(benchmarkIdentity(fn));
+  }
+  for (const [key, fn] of baseMap) {
+    if (!headMap.has(key)) removedBenchmarks.push(benchmarkIdentity(fn));
+  }
+  for (const [key, headFn] of headMap) {
+    const baseFn = baseMap.get(key);
+    if (!baseFn) continue;
+    if (baseFn.provenance || headFn.provenance) {
+      const fields = [
+        "source",
+        "source_version",
+        "protocol",
+        "helper_sha256",
+        "network_id",
+        "compute_config_sha256",
+        "seed",
+        "auth_mode",
+        "host_features"
+      ];
+      for (const field of fields) {
+        if (!baseFn.provenance || !headFn.provenance || JSON.stringify(baseFn.provenance[field]) !== JSON.stringify(headFn.provenance[field])) {
+          throw new Error(`Incompatible measurement environment: ${field}`);
+        }
+      }
+      if (JSON.stringify(baseFn.provenance?.resource_limits_sha256) !== JSON.stringify(headFn.provenance?.resource_limits_sha256)) {
+        throw new Error(
+          "Incompatible measurement environment: resource_limits_sha256"
+        );
+      }
+      if (headFn.provenance?.resource_limits_sha256) {
+        for (const metric of METRIC_KEYS) {
+          for (const field of [
+            "availability",
+            "source",
+            "limit",
+            "limit_source",
+            "limit_reason"
+          ]) {
+            if (baseFn.metrics[metric][field] !== headFn.metrics[metric][field]) {
+              throw new Error(
+                `Incompatible metric semantics: ${metric}.${field}`
+              );
+            }
+          }
+        }
+      }
+    }
+    const metrics = diffMetrics(baseFn.metrics, headFn.metrics);
+    const hasRegression = metrics.some((m) => m.regression);
+    functions.push({
+      ...benchmarkIdentity(headFn),
+      metrics,
+      hasRegression,
+      base_provenance: baseFn.provenance,
+      head_provenance: headFn.provenance
+    });
+  }
+  return {
+    functions,
+    newFunctions,
+    removedFunctions,
+    newBenchmarks,
+    removedBenchmarks
+  };
+}
+function benchmarkIdentity(fn) {
+  return {
+    function_name: fn.function_name,
+    ...fn.case_id === void 0 ? {} : { case_id: fn.case_id }
+  };
+}
+function benchmarkMap(functions) {
+  const result = /* @__PURE__ */ new Map();
+  for (const fn of functions) {
+    if (!nonblank(fn.function_name))
+      throw new Error("Benchmark function_name must not be blank");
+    const key = JSON.stringify([fn.function_name, fn.case_id ?? null]);
+    if (result.has(key))
+      throw new Error(`Duplicate benchmark identity: ${key}`);
+    result.set(key, fn);
+  }
+  return result;
+}
+function contractKey(contract) {
+  const logical = contract.schema_version !== void 0 || contract.fixture_id !== void 0 || contract.logical_id !== void 0;
+  if (!logical) {
+    if (contract.benchmarks.some((fn) => fn.case_id !== void 0)) {
+      throw new Error(
+        "Case identity requires fixture and logical contract identities"
+      );
+    }
+    return JSON.stringify(["legacy", contract.contract_id]);
+  }
+  if (![2, 3, 4].includes(contract.schema_version) || !nonblank(contract.fixture_id) || !nonblank(contract.logical_id) || contract.benchmarks.some((fn) => !nonblank(fn.case_id))) {
+    throw new Error(
+      "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
+    );
+  }
+  return JSON.stringify(["logical", contract.fixture_id, contract.logical_id]);
+}
+function nonblank(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function contractMap(contracts) {
+  const result = /* @__PURE__ */ new Map();
+  for (const contract of contracts) {
+    const key = contractKey(contract);
+    if (result.has(key))
+      throw new Error(`Duplicate logical contract identity: ${key}`);
+    benchmarkMap(contract.benchmarks);
+    for (const benchmark of contract.benchmarks) {
+      diffMetrics(benchmark.metrics, benchmark.metrics);
+      if (contract.schema_version === 3 || contract.schema_version === 4) {
+        if (!benchmark.provenance)
+          throw new Error(
+            `Schema ${contract.schema_version} benchmarks require compute provenance`
+          );
+        for (const field of [
+          "source",
+          "source_version",
+          "helper_sha256",
+          "network_id",
+          "compute_config_sha256",
+          "header_sha256",
+          "snapshot_sha256",
+          "config_sha256",
+          "input_sha256",
+          "auth_mode"
+        ]) {
+          if (!nonblank(benchmark.provenance[field]))
+            throw new Error(`Invalid compute provenance: ${field}`);
+        }
+        if (!Number.isSafeInteger(benchmark.provenance.ledger) || benchmark.provenance.ledger < 0 || !Number.isSafeInteger(benchmark.provenance.protocol) || !Array.isArray(benchmark.provenance.host_features) || !benchmark.provenance.host_features.every(nonblank)) {
+          throw new Error(
+            "Invalid compute provenance: ledger/protocol/host_features"
+          );
+        }
+        if (!Array.isArray(benchmark.provenance.seed) || benchmark.provenance.seed.length !== 32 || !benchmark.provenance.seed.every(
+          (value) => Number.isInteger(value) && value >= 0 && value <= 255
+        )) {
+          throw new Error("Invalid compute provenance: seed");
+        }
+        for (const key2 of METRIC_KEYS) {
+          const value = benchmark.metrics[key2];
+          if (value.availability === void 0 || value.availability === "measured" && !nonblank(value.source)) {
+            throw new Error(
+              `Schema ${contract.schema_version} requires explicit availability and measured source for ${key2}`
+            );
+          }
+          if (contract.schema_version === 4 && value.availability === "measured") {
+            if (value.limit === null ? !nonblank(value.limit_reason) : !nonblank(value.limit_source)) {
+              throw new Error(
+                `Schema 4 requires explicit limit provenance for ${key2}`
+              );
+            }
+          }
+        }
+        if (contract.schema_version === 4 && !/^[a-f0-9]{64}$/.test(
+          benchmark.provenance.resource_limits_sha256 ?? ""
+        )) {
+          throw new Error("Schema 4 requires resource_limits_sha256");
+        }
+      }
+    }
+    result.set(key, contract);
+  }
+  return result;
+}
+function contractLabel(contract) {
+  return contract.logical_id === void 0 ? contract.contract_id : `${contract.fixture_id} / ${contract.logical_id}`;
+}
+function diffBenchmarks(base, head) {
+  const baseMap = contractMap(base);
+  const headMap = contractMap(head);
+  const newContracts = [];
+  const removedContracts = [];
+  const contracts = [];
+  for (const [key, contract] of headMap) {
+    if (!baseMap.has(key)) newContracts.push(contractLabel(contract));
+  }
+  for (const [key, contract] of baseMap) {
+    if (!headMap.has(key)) removedContracts.push(contractLabel(contract));
+  }
+  for (const [key, headContract] of headMap) {
+    const baseContract = baseMap.get(key);
+    if (!baseContract) continue;
+    if (baseContract.schema_version !== headContract.schema_version)
+      throw new Error(
+        "Cannot compare measurements with different schema versions"
+      );
+    if (headContract.schema_version === 3 && [...baseContract.benchmarks, ...headContract.benchmarks].some(
+      (fn) => !fn.provenance
+    )) {
+      throw new Error("Schema 3 benchmarks require compute provenance");
+    }
+    const benchmarkDiff = diffFunctions(
+      baseContract.benchmarks,
+      headContract.benchmarks
+    );
+    const hasRegression = benchmarkDiff.functions.some((f) => f.hasRegression);
+    contracts.push({
+      fixture_id: headContract.fixture_id,
+      logical_id: headContract.logical_id,
+      contract_id: headContract.contract_id,
+      base_contract_id: baseContract.contract_id,
+      head_contract_id: headContract.contract_id,
+      base_commit: baseContract.git_commit,
+      head_commit: headContract.git_commit,
+      ...benchmarkDiff,
+      hasRegression
+    });
+  }
+  return {
+    contracts,
+    hasRegression: contracts.some((c) => c.hasRegression),
+    newContracts,
+    removedContracts
+  };
+}
+
+// src/config.ts
+var RuleValueSchema = external_exports.union([
+  external_exports.number(),
+  external_exports.string().refine(
+    (val) => {
+      return val === "ignore" || val === "strict_zero_tolerance" || /^allow_[\d.]+_percent_increase$/.test(val);
+    },
+    {
+      message: "Invalid rule string. Must be 'ignore', 'strict_zero_tolerance', or 'allow_X_percent_increase'"
+    }
+  )
+]);
+var GlobalThresholdsSchema = external_exports.object({
+  fail_on_any_regression: external_exports.boolean().optional(),
+  max_allowed_cpu_increase_pct: external_exports.number().optional(),
+  max_allowed_memory_increase_pct: external_exports.number().optional()
+}).strict();
+var GlobalLimitsSchema = external_exports.record(
+  external_exports.enum(METRIC_KEYS),
+  external_exports.number().nonnegative()
+);
+var FunctionLimitsSchema = external_exports.record(
+  external_exports.enum(METRIC_KEYS),
+  external_exports.number().nonnegative()
+);
+var FunctionThresholdsSchema = external_exports.record(
+  external_exports.enum(METRIC_KEYS),
+  RuleValueSchema
+);
+var WeighinConfigSchema = external_exports.object({
+  thresholds: external_exports.object({
+    global: GlobalThresholdsSchema.optional(),
+    functions: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional()
+  }).strict().optional(),
+  limits: external_exports.object({
+    global: GlobalLimitsSchema.optional(),
+    functions: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional()
+  }).strict().optional()
+}).strict();
+var U64_MAX = 18446744073709551615n;
+var I64_MIN = -9223372036854775808n;
+var I64_MAX = 9223372036854775807n;
+var U128_MAX = 340282366920938463463374607431768211455n;
+var I128_MIN = -170141183460469231731687303715884105728n;
+var I128_MAX = 170141183460469231731687303715884105727n;
+function validateLargeInt(type, val) {
+  if (typeof val !== "string") {
+    return `Invalid value for ${type}: must be a string to preserve precision`;
+  }
+  if (!/^-?\d+$/.test(val)) {
+    return `Invalid value for ${type}: must be a valid integer string`;
+  }
+  try {
+    const bi = BigInt(val);
+    switch (type) {
+      case "u64":
+        if (bi < 0n || bi > U64_MAX)
+          return `Invalid value for u64: out of bounds`;
+        break;
+      case "i64":
+        if (bi < I64_MIN || bi > I64_MAX)
+          return `Invalid value for i64: out of bounds`;
+        break;
+      case "u128":
+        if (bi < 0n || bi > U128_MAX)
+          return `Invalid value for u128: out of bounds`;
+        break;
+      case "i128":
+        if (bi < I128_MIN || bi > I128_MAX)
+          return `Invalid value for i128: out of bounds`;
+        break;
+    }
+  } catch {
+    return `Invalid value for ${type}: malformed integer string`;
+  }
+  return null;
+}
+var InvocationArgSchema = external_exports.lazy(
+  () => external_exports.object({
+    type: external_exports.preprocess(
+      (val) => typeof val === "string" ? val.toLowerCase() : val,
+      external_exports.enum([
+        "symbol",
+        "string",
+        "u32",
+        "i32",
+        "bool",
+        "u64",
+        "i64",
+        "u128",
+        "i128",
+        "address",
+        "bytes",
+        "vec",
+        "map"
+      ])
+    ),
+    value: external_exports.any()
+  }).strict().superRefine((data, ctx) => {
+    if (["u64", "i64", "u128", "i128"].includes(data.type)) {
+      const err = validateLargeInt(data.type, data.value);
+      if (err) {
+        ctx.addIssue({
+          code: external_exports.ZodIssueCode.custom,
+          message: err,
+          path: ["value"]
+        });
+      }
+    } else if (data.type === "vec") {
+      if (!Array.isArray(data.value)) {
+        ctx.addIssue({
+          code: external_exports.ZodIssueCode.custom,
+          message: "must be array",
+          path: ["value"]
+        });
+      } else {
+        data.value.forEach((val, idx) => {
+          const res = InvocationArgSchema.safeParse(val);
+          if (!res.success) {
+            res.error.issues.forEach((issue) => {
+              ctx.addIssue({ ...issue, path: ["value", idx, ...issue.path] });
+            });
+          } else {
+            data.value[idx] = res.data;
+          }
+        });
+      }
+    } else if (data.type === "map") {
+      if (!Array.isArray(data.value)) {
+        ctx.addIssue({
+          code: external_exports.ZodIssueCode.custom,
+          message: "must be array",
+          path: ["value"]
+        });
+      } else {
+        data.value.forEach((entry, idx) => {
+          if (!entry || !entry.key || !entry.value) {
+            ctx.addIssue({
+              code: external_exports.ZodIssueCode.custom,
+              message: "map entries must have key and value",
+              path: ["value", idx]
+            });
+          } else {
+            const resK = InvocationArgSchema.safeParse(entry.key);
+            if (!resK.success) {
+              resK.error.issues.forEach(
+                (issue) => ctx.addIssue({
+                  ...issue,
+                  path: ["value", idx, "key", ...issue.path]
+                })
+              );
+            } else {
+              data.value[idx].key = resK.data;
+            }
+            const resV = InvocationArgSchema.safeParse(entry.value);
+            if (!resV.success) {
+              resV.error.issues.forEach(
+                (issue) => ctx.addIssue({
+                  ...issue,
+                  path: ["value", idx, "value", ...issue.path]
+                })
+              );
+            } else {
+              data.value[idx].value = resV.data;
+            }
+          }
+        });
+      }
+    }
+  })
+);
+var idSchema = external_exports.string().refine((value) => value.trim().length > 0, "ID must not be blank");
+var InvocationSpecSchema = external_exports.object({
+  id: idSchema.optional(),
+  function_name: external_exports.string().min(1),
+  args: external_exports.array(InvocationArgSchema)
+}).strict();
+var ContractSpecSchema = external_exports.object({
+  id: idSchema.optional(),
+  wasm_path: external_exports.string().min(1),
+  invocations: external_exports.array(InvocationSpecSchema).min(1)
+}).strict();
+var FixturesSpecSchema = external_exports.object({
+  id: idSchema.optional(),
+  contracts: external_exports.array(ContractSpecSchema).min(1)
+}).strict();
+function formatZodError(error2, fileName) {
+  const lines = [`Invalid WeighIn configuration in ${fileName}:`];
+  for (const issue of error2.issues) {
+    const path7 = issue.path.join(".");
+    lines.push(`- ${path7 || "root"}: ${issue.message}`);
+  }
+  return lines.join("\n");
+}
+
 // src/identity.ts
-var id = external_exports.string().refine((value) => value.trim().length > 0, "ID must not be blank");
-var fixturesSchema = external_exports.object({
-  id: id.optional(),
-  contracts: external_exports.array(
-    external_exports.object({
-      id: id.optional(),
-      wasm_path: external_exports.string().min(1),
-      invocations: external_exports.array(
-        external_exports.object({
-          id: id.optional(),
-          function_name: external_exports.string().min(1),
-          args: external_exports.array(
-            external_exports.object({
-              type: external_exports.string().min(1),
-              value: external_exports.union([
-                external_exports.string(),
-                external_exports.number(),
-                external_exports.boolean(),
-                external_exports.null(),
-                external_exports.array(external_exports.any()),
-                external_exports.record(external_exports.any())
-              ])
-            })
-          )
-        })
-      ).min(1)
-    })
-  ).min(1)
-});
 function relativePath(value) {
   const portable = value.replace(/\\/g, "/");
   if (path.posix.isAbsolute(portable) || /^[A-Za-z]:/.test(portable)) {
@@ -35217,7 +35679,7 @@ function canonical(value) {
   return value;
 }
 function parseFixtures(raw, fixturePath) {
-  const fixtures = fixturesSchema.parse(JSON.parse(raw));
+  const fixtures = FixturesSpecSchema.parse(JSON.parse(raw));
   const fixture_id = fixtures.id === void 0 ? `path:${relativePath(fixturePath)}` : `id:${fixtures.id}`;
   const contractIds = /* @__PURE__ */ new Set();
   const contracts = fixtures.contracts.map((contract) => {
@@ -35489,9 +35951,9 @@ var AxiosInterceptorManager = class {
     });
     return this.handlers.length - 1;
   };
-  eject = (id2) => {
-    if (this.handlers[id2]) {
-      this.handlers[id2] = null;
+  eject = (id) => {
+    if (this.handlers[id]) {
+      this.handlers[id] = null;
     }
   };
   clear = () => {
@@ -35618,9 +36080,9 @@ var InterceptorManager = class {
     });
     return this.handlers.length - 1;
   }
-  eject(id2) {
-    if (this.handlers[id2]) {
-      this.handlers[id2] = null;
+  eject(id) {
+    if (this.handlers[id]) {
+      this.handlers[id] = null;
     }
   }
   forEach(fn) {
@@ -43514,14 +43976,14 @@ var Keypair = class {
    * @param id - (optional) stringified integer indicating the underlying muxed
    *     ID of the new account object
    */
-  xdrMuxedAccount(id2) {
-    if (typeof id2 !== "undefined") {
-      if (typeof id2 !== "string") {
-        throw new TypeError(`expected string for ID, got ${typeof id2}`);
+  xdrMuxedAccount(id) {
+    if (typeof id !== "undefined") {
+      if (typeof id !== "string") {
+        throw new TypeError(`expected string for ID, got ${typeof id}`);
       }
       return types.MuxedAccount.keyTypeMuxedEd25519(
         new types.MuxedAccountMed25519({
-          id: types.Uint64.fromString(id2),
+          id: types.Uint64.fromString(id),
           ed25519: this._publicKey
         })
       );
@@ -44319,7 +44781,7 @@ function clone(configObject) {
       return q;
     };
   }();
-  function format(n, i, rm, id2) {
+  function format(n, i, rm, id) {
     var c0, e, ne, len, str;
     rm = rm == null ? ROUNDING_MODE : intCheck(rm, 0, 8);
     if (!n.c) return n.toString();
@@ -44327,17 +44789,17 @@ function clone(configObject) {
     ne = n.e;
     if (i == null) {
       str = coeffToString(n.c);
-      str = id2 == 1 || id2 == 2 && (ne <= TO_EXP_NEG || ne >= TO_EXP_POS) ? toExponential(str, ne) : toFixedPoint(str, ne, "0");
+      str = id == 1 || id == 2 && (ne <= TO_EXP_NEG || ne >= TO_EXP_POS) ? toExponential(str, ne) : toFixedPoint(str, ne, "0");
     } else {
       n = round(new BigNumber3(n), i, rm);
       e = n.e;
       str = coeffToString(n.c);
       len = str.length;
-      if (id2 == 1 || id2 == 2 && (i <= e || e <= TO_EXP_NEG)) {
+      if (id == 1 || id == 2 && (i <= e || e <= TO_EXP_NEG)) {
         for (; len < i; str += "0", len++) ;
         str = toExponential(str, e);
       } else {
-        i -= ne + (id2 === 2 && e > ne);
+        i -= ne + (id === 2 && e > ne);
         str = toFixedPoint(str, e, "0");
         if (e + 1 > len) {
           if (--i > 0) for (str += "."; i--; str += "0") ;
@@ -45268,16 +45730,16 @@ function encodeMuxedAccountToAddress(muxedAccount) {
   }
   return StrKey.encodeEd25519PublicKey(muxedAccount.ed25519());
 }
-function encodeMuxedAccount(address, id2) {
+function encodeMuxedAccount(address, id) {
   if (!StrKey.isValidEd25519PublicKey(address)) {
     throw new Error("address should be a Stellar account ID (G...)");
   }
-  if (typeof id2 !== "string") {
+  if (typeof id !== "string") {
     throw new Error("id should be a string representing a number (uint64)");
   }
   return types.MuxedAccount.keyTypeMuxedEd25519(
     new types.MuxedAccountMed25519({
-      id: types.Uint64.fromString(id2),
+      id: types.Uint64.fromString(id),
       ed25519: StrKey.decodeEd25519PublicKey(address)
     })
   );
@@ -45313,16 +45775,16 @@ function _encodeMuxedAccountFullyToAddress(muxedAccount) {
 
 // node_modules/@stellar/stellar-sdk/lib/esm/base/muxed_account.js
 var MAX_UINT64 = BigInt("18446744073709551615");
-function validateUint64Id(id2) {
+function validateUint64Id(id) {
   let value;
   try {
-    value = BigInt(id2);
+    value = BigInt(id);
   } catch {
-    throw new Error(`id is not a valid uint64 string: ${id2}`);
+    throw new Error(`id is not a valid uint64 string: ${id}`);
   }
   if (value < BigInt(0) || value > MAX_UINT64) {
     throw new Error(
-      `id value out of range for uint64 [0, ${MAX_UINT64}]: ${id2}`
+      `id value out of range for uint64 [0, ${MAX_UINT64}]: ${id}`
     );
   }
 }
@@ -45337,16 +45799,16 @@ var MuxedAccount = class _MuxedAccount {
    * @param id - a stringified uint64 value that represents the ID of the
    *     muxed account
    */
-  constructor(baseAccount, id2) {
+  constructor(baseAccount, id) {
     const accountId = baseAccount.accountId();
     if (!StrKey.isValidEd25519PublicKey(accountId)) {
       throw new Error("accountId is invalid");
     }
-    validateUint64Id(id2);
+    validateUint64Id(id);
     this.account = baseAccount;
-    this._muxedXdr = encodeMuxedAccount(accountId, id2);
+    this._muxedXdr = encodeMuxedAccount(accountId, id);
     this._mAddress = encodeMuxedAccountToAddress(this._muxedXdr);
-    this._id = id2;
+    this._id = id;
   }
   /**
    * Parses an M-address into a MuxedAccount object.
@@ -45360,8 +45822,8 @@ var MuxedAccount = class _MuxedAccount {
   static fromAddress(mAddress, sequenceNum) {
     const muxedAccount = decodeAddressToMuxedAccount(mAddress);
     const gAddress = extractBaseAddress(mAddress);
-    const id2 = muxedAccount.med25519().id().toString();
-    return new _MuxedAccount(new Account(gAddress, sequenceNum), id2);
+    const id = muxedAccount.med25519().id().toString();
+    return new _MuxedAccount(new Account(gAddress, sequenceNum), id);
   }
   /**
    * Returns the underlying account object shared among all muxed
@@ -45387,14 +45849,14 @@ var MuxedAccount = class _MuxedAccount {
    *
    * @param id - a stringified uint64 value to set as the new muxed account ID
    */
-  setId(id2) {
-    if (typeof id2 !== "string") {
+  setId(id) {
+    if (typeof id !== "string") {
       throw new Error("id should be a string representing a number (uint64)");
     }
-    validateUint64Id(id2);
-    this._muxedXdr.med25519().id(types.Uint64.fromString(id2));
+    validateUint64Id(id);
+    this._muxedXdr.med25519().id(types.Uint64.fromString(id));
     this._mAddress = encodeMuxedAccountToAddress(this._muxedXdr);
-    this._id = id2;
+    this._id = id;
     return this;
   }
   /**
@@ -47950,8 +48412,8 @@ var Memo = class _Memo {
    *
    * @param id - 64-bit number represented as a string
    */
-  static id(id2) {
-    return new _Memo(MemoID, id2);
+  static id(id) {
+    return new _Memo(MemoID, id);
   }
   /**
    * Creates and returns a `MemoHash` memo.
@@ -50927,10 +51389,10 @@ var RpcServer = class {
    * });
    * ```
    */
-  async getClaimableBalance(id2) {
+  async getClaimableBalance(id) {
     let balanceId;
-    if (StrKey.isValidClaimableBalance(id2)) {
-      const buffer = StrKey.decodeClaimableBalance(id2);
+    if (StrKey.isValidClaimableBalance(id)) {
+      const buffer = StrKey.decodeClaimableBalance(id);
       const v = import_buffer28.Buffer.concat([
         import_buffer28.Buffer.from("\0\0\0"),
         buffer.subarray(0, 1)
@@ -50938,12 +51400,12 @@ var RpcServer = class {
       balanceId = types.ClaimableBalanceId.fromXDR(
         import_buffer28.Buffer.concat([v, buffer.subarray(1)])
       );
-    } else if (id2.match(/[a-f0-9]{72}/i)) {
-      balanceId = types.ClaimableBalanceId.fromXDR(id2, "hex");
-    } else if (id2.match(/[a-f0-9]{64}/i)) {
-      balanceId = types.ClaimableBalanceId.fromXDR(id2.padStart(72, "0"), "hex");
+    } else if (id.match(/[a-f0-9]{72}/i)) {
+      balanceId = types.ClaimableBalanceId.fromXDR(id, "hex");
+    } else if (id.match(/[a-f0-9]{64}/i)) {
+      balanceId = types.ClaimableBalanceId.fromXDR(id.padStart(72, "0"), "hex");
     } else {
-      throw new TypeError(`expected 72-char hex ID or strkey, not ${id2}`);
+      throw new TypeError(`expected 72-char hex ID or strkey, not ${id}`);
     }
     const trustlineLedgerKey = types.LedgerKey.claimableBalance(
       new types.LedgerKeyClaimableBalance({ balanceId })
@@ -50952,7 +51414,7 @@ var RpcServer = class {
       const entry = await this.getLedgerEntry(trustlineLedgerKey);
       return entry.val.claimableBalance();
     } catch {
-      throw new Error(`Claimable balance ${id2} not found`);
+      throw new Error(`Claimable balance ${id} not found`);
     }
   }
   /**
@@ -52178,493 +52640,6 @@ async function ensureAccountReady(rpcUrl, publicKey) {
   );
 }
 
-// src/diff.ts
-var METRIC_KEYS = [
-  "cpu_instructions",
-  "memory_bytes",
-  "ledger_read_entries",
-  "ledger_read_bytes",
-  "ledger_write_entries",
-  "ledger_write_bytes",
-  "historical_data_read_bytes",
-  "contract_data_hard_limit",
-  "tx_size_bytes",
-  "events_count",
-  "event_data_bytes"
-];
-function diffMetrics(base, head) {
-  return METRIC_KEYS.map((key) => {
-    const b = base?.[key];
-    const h = head?.[key];
-    for (const value of [b, h]) {
-      if (!value)
-        throw new Error(
-          `Missing metric ${key}; use an explicit unavailable record`
-        );
-      if (value.availability !== void 0 && !["measured", "unavailable"].includes(value.availability))
-        throw new Error(`Invalid metric availability ${key}`);
-      if (value.availability === "unavailable") {
-        if (value.consumed !== null || !value.reason?.trim())
-          throw new Error(`Invalid unavailable metric ${key}`);
-      } else if (value.consumed === null || !Number.isSafeInteger(value.consumed) || value.consumed < 0) {
-        throw new Error(`Invalid measured metric ${key}`);
-      }
-      if (value.limit !== null && (!Number.isSafeInteger(value.limit) || value.limit < 0))
-        throw new Error(`Invalid metric limit ${key}`);
-    }
-    if (b.consumed === null || h.consumed === null) {
-      return {
-        key,
-        base: b,
-        head: h,
-        availability: "unavailable",
-        reason: [
-          b.reason && `BASE: ${b.reason}`,
-          h.reason && `HEAD: ${h.reason}`
-        ].filter(Boolean).join("; "),
-        delta: null,
-        pct: null,
-        regression: false
-      };
-    }
-    const delta = h.consumed - b.consumed;
-    const pct = b.consumed === 0 ? null : delta / b.consumed * 100;
-    return {
-      key,
-      base: b,
-      head: h,
-      availability: "comparable",
-      delta,
-      pct,
-      regression: delta > 0
-    };
-  });
-}
-function diffFunctions(baseFns, headFns) {
-  const baseMap = benchmarkMap(baseFns);
-  const headMap = benchmarkMap(headFns);
-  const baseNames = new Set(baseFns.map((fn) => fn.function_name));
-  const headNames = new Set(headFns.map((fn) => fn.function_name));
-  const newFunctions = [...headNames].filter((name) => !baseNames.has(name));
-  const removedFunctions = [...baseNames].filter(
-    (name) => !headNames.has(name)
-  );
-  const newBenchmarks = [];
-  const removedBenchmarks = [];
-  const functions = [];
-  for (const [key, fn] of headMap) {
-    if (!baseMap.has(key)) newBenchmarks.push(benchmarkIdentity(fn));
-  }
-  for (const [key, fn] of baseMap) {
-    if (!headMap.has(key)) removedBenchmarks.push(benchmarkIdentity(fn));
-  }
-  for (const [key, headFn] of headMap) {
-    const baseFn = baseMap.get(key);
-    if (!baseFn) continue;
-    if (baseFn.provenance || headFn.provenance) {
-      const fields = [
-        "source",
-        "source_version",
-        "protocol",
-        "helper_sha256",
-        "network_id",
-        "compute_config_sha256",
-        "seed",
-        "auth_mode",
-        "host_features"
-      ];
-      for (const field of fields) {
-        if (!baseFn.provenance || !headFn.provenance || JSON.stringify(baseFn.provenance[field]) !== JSON.stringify(headFn.provenance[field])) {
-          throw new Error(`Incompatible measurement environment: ${field}`);
-        }
-      }
-      if (JSON.stringify(baseFn.provenance?.resource_limits_sha256) !== JSON.stringify(headFn.provenance?.resource_limits_sha256)) {
-        throw new Error(
-          "Incompatible measurement environment: resource_limits_sha256"
-        );
-      }
-      if (headFn.provenance?.resource_limits_sha256) {
-        for (const metric of METRIC_KEYS) {
-          for (const field of [
-            "availability",
-            "source",
-            "limit",
-            "limit_source",
-            "limit_reason"
-          ]) {
-            if (baseFn.metrics[metric][field] !== headFn.metrics[metric][field]) {
-              throw new Error(
-                `Incompatible metric semantics: ${metric}.${field}`
-              );
-            }
-          }
-        }
-      }
-    }
-    const metrics = diffMetrics(baseFn.metrics, headFn.metrics);
-    const hasRegression = metrics.some((m) => m.regression);
-    functions.push({
-      ...benchmarkIdentity(headFn),
-      metrics,
-      hasRegression,
-      base_provenance: baseFn.provenance,
-      head_provenance: headFn.provenance
-    });
-  }
-  return {
-    functions,
-    newFunctions,
-    removedFunctions,
-    newBenchmarks,
-    removedBenchmarks
-  };
-}
-function benchmarkIdentity(fn) {
-  return {
-    function_name: fn.function_name,
-    ...fn.case_id === void 0 ? {} : { case_id: fn.case_id }
-  };
-}
-function benchmarkMap(functions) {
-  const result = /* @__PURE__ */ new Map();
-  for (const fn of functions) {
-    if (!nonblank(fn.function_name))
-      throw new Error("Benchmark function_name must not be blank");
-    const key = JSON.stringify([fn.function_name, fn.case_id ?? null]);
-    if (result.has(key))
-      throw new Error(`Duplicate benchmark identity: ${key}`);
-    result.set(key, fn);
-  }
-  return result;
-}
-function contractKey(contract) {
-  const logical = contract.schema_version !== void 0 || contract.fixture_id !== void 0 || contract.logical_id !== void 0;
-  if (!logical) {
-    if (contract.benchmarks.some((fn) => fn.case_id !== void 0)) {
-      throw new Error(
-        "Case identity requires fixture and logical contract identities"
-      );
-    }
-    return JSON.stringify(["legacy", contract.contract_id]);
-  }
-  if (![2, 3, 4].includes(contract.schema_version) || !nonblank(contract.fixture_id) || !nonblank(contract.logical_id) || contract.benchmarks.some((fn) => !nonblank(fn.case_id))) {
-    throw new Error(
-      "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
-    );
-  }
-  return JSON.stringify(["logical", contract.fixture_id, contract.logical_id]);
-}
-function nonblank(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
-function contractMap(contracts) {
-  const result = /* @__PURE__ */ new Map();
-  for (const contract of contracts) {
-    const key = contractKey(contract);
-    if (result.has(key))
-      throw new Error(`Duplicate logical contract identity: ${key}`);
-    benchmarkMap(contract.benchmarks);
-    for (const benchmark of contract.benchmarks) {
-      diffMetrics(benchmark.metrics, benchmark.metrics);
-      if (contract.schema_version === 3 || contract.schema_version === 4) {
-        if (!benchmark.provenance)
-          throw new Error(
-            `Schema ${contract.schema_version} benchmarks require compute provenance`
-          );
-        for (const field of [
-          "source",
-          "source_version",
-          "helper_sha256",
-          "network_id",
-          "compute_config_sha256",
-          "header_sha256",
-          "snapshot_sha256",
-          "config_sha256",
-          "input_sha256",
-          "auth_mode"
-        ]) {
-          if (!nonblank(benchmark.provenance[field]))
-            throw new Error(`Invalid compute provenance: ${field}`);
-        }
-        if (!Number.isSafeInteger(benchmark.provenance.ledger) || benchmark.provenance.ledger < 0 || !Number.isSafeInteger(benchmark.provenance.protocol) || !Array.isArray(benchmark.provenance.host_features) || !benchmark.provenance.host_features.every(nonblank)) {
-          throw new Error(
-            "Invalid compute provenance: ledger/protocol/host_features"
-          );
-        }
-        if (!Array.isArray(benchmark.provenance.seed) || benchmark.provenance.seed.length !== 32 || !benchmark.provenance.seed.every(
-          (value) => Number.isInteger(value) && value >= 0 && value <= 255
-        )) {
-          throw new Error("Invalid compute provenance: seed");
-        }
-        for (const key2 of METRIC_KEYS) {
-          const value = benchmark.metrics[key2];
-          if (value.availability === void 0 || value.availability === "measured" && !nonblank(value.source)) {
-            throw new Error(
-              `Schema ${contract.schema_version} requires explicit availability and measured source for ${key2}`
-            );
-          }
-          if (contract.schema_version === 4 && value.availability === "measured") {
-            if (value.limit === null ? !nonblank(value.limit_reason) : !nonblank(value.limit_source)) {
-              throw new Error(
-                `Schema 4 requires explicit limit provenance for ${key2}`
-              );
-            }
-          }
-        }
-        if (contract.schema_version === 4 && !/^[a-f0-9]{64}$/.test(
-          benchmark.provenance.resource_limits_sha256 ?? ""
-        )) {
-          throw new Error("Schema 4 requires resource_limits_sha256");
-        }
-      }
-    }
-    result.set(key, contract);
-  }
-  return result;
-}
-function contractLabel(contract) {
-  return contract.logical_id === void 0 ? contract.contract_id : `${contract.fixture_id} / ${contract.logical_id}`;
-}
-function diffBenchmarks(base, head) {
-  const baseMap = contractMap(base);
-  const headMap = contractMap(head);
-  const newContracts = [];
-  const removedContracts = [];
-  const contracts = [];
-  for (const [key, contract] of headMap) {
-    if (!baseMap.has(key)) newContracts.push(contractLabel(contract));
-  }
-  for (const [key, contract] of baseMap) {
-    if (!headMap.has(key)) removedContracts.push(contractLabel(contract));
-  }
-  for (const [key, headContract] of headMap) {
-    const baseContract = baseMap.get(key);
-    if (!baseContract) continue;
-    if (baseContract.schema_version !== headContract.schema_version)
-      throw new Error(
-        "Cannot compare measurements with different schema versions"
-      );
-    if (headContract.schema_version === 3 && [...baseContract.benchmarks, ...headContract.benchmarks].some(
-      (fn) => !fn.provenance
-    )) {
-      throw new Error("Schema 3 benchmarks require compute provenance");
-    }
-    const benchmarkDiff = diffFunctions(
-      baseContract.benchmarks,
-      headContract.benchmarks
-    );
-    const hasRegression = benchmarkDiff.functions.some((f) => f.hasRegression);
-    contracts.push({
-      fixture_id: headContract.fixture_id,
-      logical_id: headContract.logical_id,
-      contract_id: headContract.contract_id,
-      base_contract_id: baseContract.contract_id,
-      head_contract_id: headContract.contract_id,
-      base_commit: baseContract.git_commit,
-      head_commit: headContract.git_commit,
-      ...benchmarkDiff,
-      hasRegression
-    });
-  }
-  return {
-    contracts,
-    hasRegression: contracts.some((c) => c.hasRegression),
-    newContracts,
-    removedContracts
-  };
-}
-
-// src/config.ts
-var RuleValueSchema = external_exports.union([
-  external_exports.number(),
-  external_exports.string().refine(
-    (val) => {
-      return val === "ignore" || val === "strict_zero_tolerance" || /^allow_[\d.]+_percent_increase$/.test(val);
-    },
-    {
-      message: "Invalid rule string. Must be 'ignore', 'strict_zero_tolerance', or 'allow_X_percent_increase'"
-    }
-  )
-]);
-var GlobalThresholdsSchema = external_exports.object({
-  fail_on_any_regression: external_exports.boolean().optional(),
-  max_allowed_cpu_increase_pct: external_exports.number().optional(),
-  max_allowed_memory_increase_pct: external_exports.number().optional()
-}).strict();
-var GlobalLimitsSchema = external_exports.record(
-  external_exports.enum(METRIC_KEYS),
-  external_exports.number().nonnegative()
-);
-var FunctionLimitsSchema = external_exports.record(
-  external_exports.enum(METRIC_KEYS),
-  external_exports.number().nonnegative()
-);
-var FunctionThresholdsSchema = external_exports.record(
-  external_exports.enum(METRIC_KEYS),
-  RuleValueSchema
-);
-var WeighinConfigSchema = external_exports.object({
-  thresholds: external_exports.object({
-    global: GlobalThresholdsSchema.optional(),
-    functions: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional()
-  }).strict().optional(),
-  limits: external_exports.object({
-    global: GlobalLimitsSchema.optional(),
-    functions: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional()
-  }).strict().optional()
-}).strict();
-var U64_MAX = 18446744073709551615n;
-var I64_MIN = -9223372036854775808n;
-var I64_MAX = 9223372036854775807n;
-var U128_MAX = 340282366920938463463374607431768211455n;
-var I128_MIN = -170141183460469231731687303715884105728n;
-var I128_MAX = 170141183460469231731687303715884105727n;
-function validateLargeInt(type, val) {
-  if (typeof val !== "string") {
-    return `Invalid value for ${type}: must be a string to preserve precision`;
-  }
-  if (!/^-?\d+$/.test(val)) {
-    return `Invalid value for ${type}: must be a valid integer string`;
-  }
-  try {
-    const bi = BigInt(val);
-    switch (type) {
-      case "u64":
-        if (bi < 0n || bi > U64_MAX)
-          return `Invalid value for u64: out of bounds`;
-        break;
-      case "i64":
-        if (bi < I64_MIN || bi > I64_MAX)
-          return `Invalid value for i64: out of bounds`;
-        break;
-      case "u128":
-        if (bi < 0n || bi > U128_MAX)
-          return `Invalid value for u128: out of bounds`;
-        break;
-      case "i128":
-        if (bi < I128_MIN || bi > I128_MAX)
-          return `Invalid value for i128: out of bounds`;
-        break;
-    }
-  } catch {
-    return `Invalid value for ${type}: malformed integer string`;
-  }
-  return null;
-}
-var InvocationArgSchema = external_exports.lazy(
-  () => external_exports.object({
-    type: external_exports.preprocess(
-      (val) => typeof val === "string" ? val.toLowerCase() : val,
-      external_exports.enum([
-        "symbol",
-        "string",
-        "u32",
-        "i32",
-        "bool",
-        "u64",
-        "i64",
-        "u128",
-        "i128",
-        "address",
-        "bytes",
-        "vec",
-        "map"
-      ])
-    ),
-    value: external_exports.any()
-  }).strict().superRefine((data, ctx) => {
-    if (["u64", "i64", "u128", "i128"].includes(data.type)) {
-      const err = validateLargeInt(data.type, data.value);
-      if (err) {
-        ctx.addIssue({
-          code: external_exports.ZodIssueCode.custom,
-          message: err,
-          path: ["value"]
-        });
-      }
-    } else if (data.type === "vec") {
-      if (!Array.isArray(data.value)) {
-        ctx.addIssue({
-          code: external_exports.ZodIssueCode.custom,
-          message: "must be array",
-          path: ["value"]
-        });
-      } else {
-        data.value.forEach((val, idx) => {
-          const res = InvocationArgSchema.safeParse(val);
-          if (!res.success) {
-            res.error.issues.forEach((issue) => {
-              ctx.addIssue({ ...issue, path: ["value", idx, ...issue.path] });
-            });
-          } else {
-            data.value[idx] = res.data;
-          }
-        });
-      }
-    } else if (data.type === "map") {
-      if (!Array.isArray(data.value)) {
-        ctx.addIssue({
-          code: external_exports.ZodIssueCode.custom,
-          message: "must be array",
-          path: ["value"]
-        });
-      } else {
-        data.value.forEach((entry, idx) => {
-          if (!entry || !entry.key || !entry.value) {
-            ctx.addIssue({
-              code: external_exports.ZodIssueCode.custom,
-              message: "map entries must have key and value",
-              path: ["value", idx]
-            });
-          } else {
-            const resK = InvocationArgSchema.safeParse(entry.key);
-            if (!resK.success) {
-              resK.error.issues.forEach(
-                (issue) => ctx.addIssue({
-                  ...issue,
-                  path: ["value", idx, "key", ...issue.path]
-                })
-              );
-            } else {
-              data.value[idx].key = resK.data;
-            }
-            const resV = InvocationArgSchema.safeParse(entry.value);
-            if (!resV.success) {
-              resV.error.issues.forEach(
-                (issue) => ctx.addIssue({
-                  ...issue,
-                  path: ["value", idx, "value", ...issue.path]
-                })
-              );
-            } else {
-              data.value[idx].value = resV.data;
-            }
-          }
-        });
-      }
-    }
-  })
-);
-var InvocationSpecSchema = external_exports.object({
-  function_name: external_exports.string(),
-  args: external_exports.array(InvocationArgSchema)
-}).strict();
-var ContractSpecSchema = external_exports.object({
-  wasm_path: external_exports.string(),
-  invocations: external_exports.array(InvocationSpecSchema)
-}).strict();
-var FixturesSpecSchema = external_exports.object({
-  contracts: external_exports.array(ContractSpecSchema)
-}).strict();
-function formatZodError(error2, fileName) {
-  const lines = [`Invalid WeighIn configuration in ${fileName}:`];
-  for (const issue of error2.issues) {
-    const path7 = issue.path.join(".");
-    lines.push(`- ${path7 || "root"}: ${issue.message}`);
-  }
-  return lines.join("\n");
-}
-
 // src/simulation.ts
 var fs = __toESM(require("fs"));
 var path2 = __toESM(require("path"));
@@ -52721,7 +52696,7 @@ function execute(file, args, input, cwd) {
   });
 }
 var provisioned;
-async function resolveSimulationHelper(explicitPath) {
+async function resolveSimulationHelper(explicitPath, customBuild) {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error("Native simulation currently supports Linux x64 only");
   }
@@ -52735,8 +52710,11 @@ async function resolveSimulationHelper(explicitPath) {
     }
     return file;
   }
-  if (!provisioned)
-    provisioned = (async () => {
+  if (!provisioned) {
+    const buildPromise = (async () => {
+      if (customBuild) {
+        return customBuild();
+      }
       const directory = path2.resolve(__dirname, "../native/simulation");
       const manifest = path2.join(directory, "Cargo.toml");
       if (!fs.existsSync(manifest))
@@ -52766,6 +52744,14 @@ async function resolveSimulationHelper(explicitPath) {
         "target/x86_64-unknown-linux-gnu/release/weighin-simulation"
       );
     })();
+    const attempt = buildPromise.catch((err) => {
+      if (provisioned === attempt) {
+        provisioned = void 0;
+      }
+      throw err;
+    });
+    provisioned = attempt;
+  }
   return provisioned;
 }
 async function simulateSnapshot(input, helperPath) {
@@ -53820,20 +53806,40 @@ function renderFunctionTable(fn) {
     )
   ].join("\n");
 }
+function compareCodePoints(a, b) {
+  const sa = a ?? "";
+  const sb = b ?? "";
+  if (sa < sb) return -1;
+  if (sa > sb) return 1;
+  return 0;
+}
+function compareContracts(a, b) {
+  return compareCodePoints(a.fixture_id, b.fixture_id) || compareCodePoints(a.logical_id, b.logical_id) || compareCodePoints(a.contract_id, b.contract_id);
+}
+function compareBenchmarkIdentities(a, b) {
+  return compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id);
+}
+function compareFunctions(a, b) {
+  return compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id);
+}
+function compareViolations(a, b) {
+  return compareCodePoints(a.fixture_id, b.fixture_id) || compareCodePoints(a.logical_id, b.logical_id) || compareCodePoints(a.contract_id, b.contract_id) || compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id) || compareCodePoints(a.metric, b.metric);
+}
 function renderComment(diff, violations, baseRef, headSha) {
   const lines = [];
-  const statusEmoji = violations.length > 0 ? "\u{1F534}" : "\u{1F7E2}";
-  const statusText = violations.length > 0 ? `**${violations.length} threshold violation${violations.length > 1 ? "s" : ""}**` : "**All thresholds passed**";
+  const sortedViolations = [...violations].sort(compareViolations);
+  const statusEmoji = sortedViolations.length > 0 ? "\u{1F534}" : "\u{1F7E2}";
+  const statusText = sortedViolations.length > 0 ? `**${sortedViolations.length} threshold violation${sortedViolations.length > 1 ? "s" : ""}**` : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
   lines.push(
     `${statusText} \u2014 comparing \`${baseRef}\` \u2192 \`${headSha.slice(0, 8)}\``
   );
   lines.push("");
-  if (violations.length > 0) {
+  if (sortedViolations.length > 0) {
     lines.push("### \u274C Violations");
     lines.push("");
-    for (const v of violations) {
+    for (const v of sortedViolations) {
       const measured = diff.contracts.find((c) => contractLabel(c) === contractLabel(v))?.functions.find(
         (fn) => fn.function_name === v.function_name && fn.case_id === v.case_id
       )?.metrics.find((m) => m.key === v.metric);
@@ -53843,38 +53849,50 @@ function renderComment(diff, violations, baseRef, headSha) {
     }
     lines.push("");
   }
-  if (diff.newContracts.length > 0) {
+  const sortedNewContracts = [...diff.newContracts].sort(compareCodePoints);
+  const sortedRemovedContracts = [...diff.removedContracts].sort(
+    compareCodePoints
+  );
+  if (sortedNewContracts.length > 0) {
     lines.push(
-      `> **New contracts** (no baseline): ${diff.newContracts.map((c) => `\`${c}\``).join(", ")}`
+      `> **New contracts** (no baseline): ${sortedNewContracts.map((c) => `\`${c}\``).join(", ")}`
     );
     lines.push("");
   }
-  if (diff.removedContracts.length > 0) {
+  if (sortedRemovedContracts.length > 0) {
     lines.push(
-      `> **Removed contracts**: ${diff.removedContracts.map((c) => `\`${c}\``).join(", ")}`
+      `> **Removed contracts**: ${sortedRemovedContracts.map((c) => `\`${c}\``).join(", ")}`
     );
     lines.push("");
   }
-  for (const contract of diff.contracts) {
+  const sortedContracts = [...diff.contracts].sort(compareContracts);
+  for (const contract of sortedContracts) {
     lines.push(`### Contract \`${contractLabel(contract)}\``);
     lines.push("");
     lines.push(
       `Runtime addresses: BASE \`${contract.base_contract_id}\` \u2192 HEAD \`${contract.head_contract_id}\``
     );
     lines.push("");
-    if (contract.newBenchmarks.length > 0) {
+    const sortedNewBenchmarks = [...contract.newBenchmarks].sort(
+      compareBenchmarkIdentities
+    );
+    const sortedRemovedBenchmarks = [...contract.removedBenchmarks].sort(
+      compareBenchmarkIdentities
+    );
+    if (sortedNewBenchmarks.length > 0) {
       lines.push(
-        `> New benchmarks (no baseline): ${contract.newBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`
+        `> New benchmarks (no baseline): ${sortedNewBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`
       );
       lines.push("");
     }
-    if (contract.removedBenchmarks.length > 0) {
+    if (sortedRemovedBenchmarks.length > 0) {
       lines.push(
-        `> Removed benchmarks: ${contract.removedBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`
+        `> Removed benchmarks: ${sortedRemovedBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`
       );
       lines.push("");
     }
-    for (const fn of contract.functions) {
+    const sortedFunctions = [...contract.functions].sort(compareFunctions);
+    for (const fn of sortedFunctions) {
       lines.push(renderFunctionTable(fn));
       lines.push("");
     }
