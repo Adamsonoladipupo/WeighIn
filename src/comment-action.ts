@@ -1,6 +1,7 @@
 import * as core from "@actions/core";
+import * as github from "@actions/github";
 import * as fs from "fs";
-import * as path from "path";
+import { parsePrMetadata } from "./pr-metadata";
 import { upsertPrComment } from "./comment";
 
 async function run(): Promise<void> {
@@ -18,11 +19,8 @@ async function run(): Promise<void> {
 
     const reportBody = fs.readFileSync(reportPath, "utf8");
     const metadataRaw = fs.readFileSync(metadataPath, "utf8");
-    const metadata = JSON.parse(metadataRaw);
-
-    if (!metadata.prNumber) {
-      throw new Error("prNumber not found in metadata file");
-    }
+    const { owner, repo } = github.context.repo;
+    const metadata = parsePrMetadata(metadataRaw, `${owner}/${repo}`);
 
     await upsertPrComment(token, metadata.prNumber, reportBody);
   } catch (error: any) {

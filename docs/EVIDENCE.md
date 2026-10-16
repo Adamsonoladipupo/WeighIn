@@ -72,8 +72,12 @@ the final saved body equals the core report
 ran default-branch `eaeea48ca77d1ff74c3a4cdee5f158a44fb4819e`, not PR code;
 their own `head_sha` must not be confused with the benchmark producer's revision.
 
-Consumer examples now pin the verified public immutable `bbbe9001bbd375fd6a1ff75be5da2593c86fff20`.
-Historical experiments below remain attributed to their original producers.
+Consumer examples pin the verified public immutable `bbbe9001bbd375fd6a1ff75be5da2593c86fff20`.
+That revision is a **legacy** producer/consumer pair under the versioned metadata
+contract: its producer emits unversioned metadata and its consumer accepts it.
+The new versioned consumer rejects that legacy artifact instead of inferring a
+repository. Historical experiments below remain attributed to their original
+producers.
 
 ## External Project Validation — Soroban Forge
 

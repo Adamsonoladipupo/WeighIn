@@ -2,6 +2,7 @@
 import * as fs from "fs";
 import { execSync } from "child_process";
 import { runMeasurement } from "./measurement";
+import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 
 function getGitCommit(): string {
   try {
@@ -56,7 +57,7 @@ async function main() {
   console.log(`Starting Weighin Benchmarking...`);
   console.log(`Fixtures: ${fixturesPath}`);
   console.log(`Output:   ${outputPath}`);
-  console.log(`RPC URL:  ${rpcUrl}`);
+  console.log(`RPC URL:  ${sanitizeEndpoint(rpcUrl)}`);
   console.log(`Commit:   ${gitCommit}`);
   console.log(`SDK:      ${sdkVersion}`);
 
@@ -70,7 +71,10 @@ async function main() {
     fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
     console.log(`Done. Results written to ${outputPath}`);
   } catch (error: any) {
-    console.error(`Benchmarking failed:`, error);
+    const detail = String(error?.stack ?? error?.message ?? error);
+    console.error(
+      `Benchmarking failed: ${redactEndpointSecrets(detail, rpcUrl)}`,
+    );
     process.exit(1);
   }
 }
