@@ -10,7 +10,7 @@ import { diffBenchmarks, DiffResult, contractLabel } from "./diff";
 import { loadConfig, enforceThresholds, Violation } from "./threshold";
 import { renderComment } from "./comment";
 import { buildForRevision } from "./build-selection";
-import { writeReportFile } from "./report";
+import { writeReportFile, generateFailureReport } from "./report";
 import { buildPrMetadata } from "./pr-metadata";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 
@@ -449,6 +449,20 @@ run().catch(async (error: Error) => {
   core.setOutput("result", "fail");
   core.setOutput("diff-json", "{}");
   core.setFailed(message);
+
+  const reportPathInput = core.getInput("report-path");
+  const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
+  if (reportPathInput) {
+    try {
+      const failureReport = generateFailureReport(message);
+      writeReportFile(reportPathInput, headWorkspace, failureReport);
+    } catch (writeErr: any) {
+      core.warning(
+        `Failed to write unsuccessful-comparison report: ${writeErr.message}`,
+      );
+    }
+  }
+
   if (process.env.GITHUB_STEP_SUMMARY) {
     await core.summary
       .addRaw(

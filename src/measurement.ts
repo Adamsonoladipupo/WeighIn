@@ -254,11 +254,20 @@ export function toScVal(arg: InvocationArg): xdr.ScVal {
     case "map": {
       if (!Array.isArray(val))
         throw new Error("Invalid value for map: must be array");
+      const seenKeyXdrs = new Set<string>();
       const entries = val.map((entry, index) => {
         if (!entry?.key || !entry?.value)
           throw new Error(`Invalid map entry at index ${index}`);
+        const keySc = toScVal(entry.key);
+        const keyXdrHex = keySc.toXDR("hex");
+        if (seenKeyXdrs.has(keyXdrHex)) {
+          throw new Error(
+            `Duplicate map key detected at entry ${index}: key encodes to identical Soroban ScVal value`,
+          );
+        }
+        seenKeyXdrs.add(keyXdrHex);
         return new xdr.ScMapEntry({
-          key: toScVal(entry.key),
+          key: keySc,
           val: toScVal(entry.value),
         });
       });

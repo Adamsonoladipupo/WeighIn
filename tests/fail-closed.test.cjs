@@ -106,7 +106,7 @@ test("empty fixture suites and contracts are rejected; zero argument invocations
   );
 });
 
-function action(mode, config = policy, tmpRoot = null) {
+function action(mode, config = policy, tmpRoot = null, reportPath = null) {
   const temporary =
     tmpRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), "weighin-action-unit-"));
   const keyLogDir = path.join(temporary, "key-log");
@@ -170,6 +170,7 @@ function action(mode, config = policy, tmpRoot = null) {
           "INPUT_CONFIG-PATH": "weighin.toml",
           "INPUT_GITHUB-TOKEN": "",
           "INPUT_BASE-REF": "main",
+          "INPUT_REPORT-PATH": reportPath || "",
         },
       },
     );
@@ -183,12 +184,17 @@ function action(mode, config = policy, tmpRoot = null) {
           .filter(Boolean)
           .map((line) => JSON.parse(line))
       : [];
+    const reportFilePath = reportPath ? path.join(temporary, "head", reportPath) : null;
+    const reportContent = reportFilePath && fs.existsSync(reportFilePath)
+      ? fs.readFileSync(reportFilePath, "utf8")
+      : null;
     return {
       ...processResult,
       output: fs.readFileSync(output, "utf8"),
       summary: fs.readFileSync(summary, "utf8"),
       missingConfig: loadConfig(path.join(temporary, "missing.toml")),
       keyPaths,
+      reportContent,
     };
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
@@ -298,4 +304,27 @@ test("Action unchanged control and optional absent policy still pass; regression
   const regression = action("regression");
   assert.equal(regression.status, 1);
   assert.match(regression.summary, /increased/);
+});
+
+test("Action persists an explicit unsuccessful-comparison report on configuration/fixture/RPC failures when report-path is set", () => {
+  for (const failureMode of ["rpc-unhealthy", "missing-fixtures", "malformed-fixtures"]) {
+    const res = action(failureMode, policy, null, "weighin-report.md");
+    assert.equal(res.status, 1);
+    assert.match(res.output, /fail/);
+    assert.ok(res.reportContent, `expected report file to exist for ${failureMode}`);
+    assert.match(res.reportContent, /# WeighIn Resource Benchmark: Unsuccessful Comparison/);
+    assert.match(res.reportContent, /> \*\*Status: FAILED\*\*/);
+    assert.match(res.reportContent, /Policies established:\*\* No/);
+    assert.match(res.reportContent, /Thresholds evaluated:\*\* None/);
+    assert.match(res.reportContent, /No passing comparison/);
+    assert.doesNotMatch(res.reportContent, /thresholds-passed/);
+  }
+});
+
+test("Action preserves primary error when writing report-path fails due to invalid output path", () => {
+  // Pass an invalid path that cannot be created as a file
+  const res = action("rpc-unhealthy", policy, null, "fixtures.json"); // fixtures.json already exists as a file, but let's test a directory path as file
+  assert.equal(res.status, 1);
+  assert.match(res.output, /fail/);
+  assert.match(res.summary, /RPC has not reported healthy/);
 });

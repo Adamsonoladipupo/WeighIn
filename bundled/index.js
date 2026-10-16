@@ -53235,11 +53235,20 @@ function toScVal(arg) {
     case "map": {
       if (!Array.isArray(val))
         throw new Error("Invalid value for map: must be array");
+      const seenKeyXdrs = /* @__PURE__ */ new Set();
       const entries = val.map((entry, index) => {
         if (!entry?.key || !entry?.value)
           throw new Error(`Invalid map entry at index ${index}`);
+        const keySc = toScVal(entry.key);
+        const keyXdrHex = keySc.toXDR("hex");
+        if (seenKeyXdrs.has(keyXdrHex)) {
+          throw new Error(
+            `Duplicate map key detected at entry ${index}: key encodes to identical Soroban ScVal value`
+          );
+        }
+        seenKeyXdrs.add(keyXdrHex);
         return new types.ScMapEntry({
-          key: toScVal(entry.key),
+          key: keySc,
           val: toScVal(entry.value)
         });
       });
@@ -54135,6 +54144,28 @@ function writeReportFile(reportPathInput, headWorkspace, body) {
     );
   }
 }
+function generateFailureReport(errorMessage) {
+  return [
+    "# WeighIn Resource Benchmark: Unsuccessful Comparison",
+    "",
+    "> **Status: FAILED** \u2014 A comparison or policy result could not be established due to an execution failure.",
+    "",
+    "## Failure Details",
+    "",
+    "```",
+    errorMessage,
+    "```",
+    "",
+    "## Policy Result",
+    "",
+    "- **Policies established:** No",
+    "- **Thresholds evaluated:** None",
+    "- **Benchmark metrics:** None (not measured)",
+    "",
+    "No passing comparison, deltas, or resource consumption metrics were established.",
+    ""
+  ].join("\n");
+}
 
 // src/pr-metadata.ts
 var PR_METADATA_SCHEMA_VERSION = 1;
@@ -54475,6 +54506,18 @@ run().catch(async (error2) => {
   core3.setOutput("result", "fail");
   core3.setOutput("diff-json", "{}");
   core3.setFailed(message);
+  const reportPathInput = core3.getInput("report-path");
+  const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
+  if (reportPathInput) {
+    try {
+      const failureReport = generateFailureReport(message);
+      writeReportFile(reportPathInput, headWorkspace, failureReport);
+    } catch (writeErr) {
+      core3.warning(
+        `Failed to write unsuccessful-comparison report: ${writeErr.message}`
+      );
+    }
+  }
   if (process.env.GITHUB_STEP_SUMMARY) {
     await core3.summary.addRaw(
       `## WeighIn comparison failed
