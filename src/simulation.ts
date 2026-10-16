@@ -88,8 +88,14 @@ function execute(
   args: string[],
   input?: string,
   cwd?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(
+        signal.reason || new Error("Simulation helper execution cancelled"),
+      );
+    }
     const child = execFile(
       file,
       args,
@@ -97,13 +103,28 @@ function execute(
         cwd,
         timeout: input === undefined ? 600_000 : 30_000,
         maxBuffer: 16 * 1024 * 1024,
+        signal,
       },
       (error, stdout, stderr) => {
-        if (error)
+        if (signal?.aborted) {
           reject(
-            new Error(`Simulation helper failed: ${stderr || error.message}`),
+            signal.reason || new Error("Simulation helper execution cancelled"),
           );
-        else resolve(stdout);
+        } else if (error) {
+          if (
+            error.name === "AbortError" ||
+            (error as any).code === "ABORT_ERR"
+          ) {
+            reject(
+              signal?.reason ||
+                new Error("Simulation helper execution cancelled"),
+            );
+          } else {
+            reject(
+              new Error(`Simulation helper failed: ${stderr || error.message}`),
+            );
+          }
+        } else resolve(stdout);
       },
     );
     // Ignore EPIPE here: the exit callback reports a helper that rejects input.
@@ -246,8 +267,15 @@ export async function resolveSimulationHelper(
 export async function simulateSnapshot(
   input: SimulationInput,
   helperPath: string,
+  signal?: AbortSignal,
 ): Promise<SimulationOutput> {
-  const stdout = await execute(helperPath, [], JSON.stringify(input));
+  const stdout = await execute(
+    helperPath,
+    [],
+    JSON.stringify(input),
+    undefined,
+    signal,
+  );
   let output: SimulationOutput;
   try {
     output = outputSchema.parse(JSON.parse(stdout));
@@ -423,16 +451,27 @@ async function callRpc(
   rpcUrl: string,
   method: string,
   params: unknown,
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  if (signal?.aborted) {
+    throw signal.reason || new Error(`RPC ${method} cancelled`);
+  }
   let response: Response;
+  const timeoutSignal = AbortSignal.timeout(30_000);
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
   try {
     response = await fetch(rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      signal: AbortSignal.timeout(30_000),
+      signal: combinedSignal,
     });
   } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`RPC ${method} cancelled`);
+    }
     throw new Error(
       `RPC ${method} transport failure at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String((error as any)?.message ?? error), rpcUrl)}`,
     );
@@ -447,6 +486,10 @@ async function callRpc(
   return body.result;
 }
 
+export interface MeasureInvocationOptions {
+  signal?: AbortSignal;
+}
+
 /** Capture all discovered keys/config at one ledger; retry the entire capture on drift.
  * RPC and helper must agree on transaction data and return value at that ledger.
  * The fixed seed makes random-dependent RPC parity an explicit unsupported case.
@@ -455,14 +498,19 @@ export async function measureInvocation(
   rpcUrl: string,
   transaction: Transaction,
   helperPath: string,
+  options?: MeasureInvocationOptions,
 ): Promise<{
   output: SimulationOutput;
   provenance: ComputeProvenance;
   limits: ResourceLimits;
 }> {
+  const signal = options?.signal;
+  if (signal?.aborted) {
+    throw signal.reason || new Error("Measurement cancelled");
+  }
   const network = z
     .object({ passphrase: encoded, protocolVersion: integer })
-    .parse(await callRpc(rpcUrl, "getNetwork", {}));
+    .parse(await callRpc(rpcUrl, "getNetwork", {}, signal));
   if (network.protocolVersion !== 28)
     throw new Error(
       `Unsupported protocol ${network.protocolVersion}: simulation helper supports 28`,
@@ -483,9 +531,17 @@ export async function measureInvocation(
   };
   let discoveredKeysCount = 0;
   for (let attempt = 0; attempt < 30; attempt++) {
-    const raw = await callRpc(rpcUrl, "simulateTransaction", {
-      transaction: transaction.toXDR(),
-    });
+    if (signal?.aborted) {
+      throw signal.reason || new Error("Measurement cancelled");
+    }
+    const raw = await callRpc(
+      rpcUrl,
+      "simulateTransaction",
+      {
+        transaction: transaction.toXDR(),
+      },
+      signal,
+    );
     const error = (raw as { error?: string }).error;
     if (error) throw new Error(`RPC simulation failed: ${error}`);
     const simulation = simulationSchema.parse(raw);
@@ -505,10 +561,18 @@ export async function measureInvocation(
     >();
     let drift = false;
     for (let offset = 0; offset < requested.length; offset += 200) {
+      if (signal?.aborted) {
+        throw signal.reason || new Error("Measurement cancelled");
+      }
       const batch = requested.slice(offset, offset + 200);
       let rawEntries: unknown;
       try {
-        rawEntries = await callRpc(rpcUrl, "getLedgerEntries", { keys: batch });
+        rawEntries = await callRpc(
+          rpcUrl,
+          "getLedgerEntries",
+          { keys: batch },
+          signal,
+        );
       } catch (failure) {
         if (!isTransientLedgerRead(failure)) throw failure;
         transientReadFailures++;
@@ -523,7 +587,22 @@ export async function measureInvocation(
         console.warn(
           `Transient captive-core ledger-read failure; discarding snapshot and retrying capture (${transientReadFailures}/3, ${delay}ms): ${failure instanceof Error ? failure.message : failure}`,
         );
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, delay);
+          if (signal) {
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(signal.reason || new Error("Measurement cancelled"));
+            };
+            if (signal.aborted) {
+              clearTimeout(timer);
+              return reject(
+                signal.reason || new Error("Measurement cancelled"),
+              );
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
         drift = true;
         break;
       }
@@ -553,10 +632,15 @@ export async function measureInvocation(
         ledgers: z.array(z.object({ sequence: integer, headerXdr: encoded })),
       })
       .parse(
-        await callRpc(rpcUrl, "getLedgers", {
-          startLedger: simulation.latestLedger,
-          pagination: { limit: 1 },
-        }),
+        await callRpc(
+          rpcUrl,
+          "getLedgers",
+          {
+            startLedger: simulation.latestLedger,
+            pagination: { limit: 1 },
+          },
+          signal,
+        ),
       );
     const row = headers.ledgers.find(
       (item) => item.sequence === simulation.latestLedger,
@@ -608,7 +692,7 @@ export async function measureInvocation(
     };
     let output: SimulationOutput;
     try {
-      output = await simulateSnapshot(input, helperPath);
+      output = await simulateSnapshot(input, helperPath, signal);
     } catch (failure) {
       const message =
         failure instanceof Error ? failure.message : String(failure);

@@ -310,6 +310,7 @@ function calculateContractId(deployerAddress: string, salt: Buffer): string {
 async function getOrInitAccount(
   keyFile: string,
   rpcUrl: string,
+  signal?: AbortSignal,
 ): Promise<Keypair> {
   let keypair: Keypair;
   if (fs.existsSync(keyFile)) {
@@ -320,7 +321,7 @@ async function getOrInitAccount(
     fs.writeFileSync(keyFile, keypair.secret(), { mode: 0o600 });
   }
 
-  await ensureAccountReady(rpcUrl, keypair.publicKey());
+  await ensureAccountReady(rpcUrl, keypair.publicKey(), signal);
 
   return keypair;
 }
@@ -329,13 +330,34 @@ async function getOrInitAccount(
 async function waitForTransaction(
   server: rpc.Server,
   txHash: string,
+  signal?: AbortSignal,
 ): Promise<rpc.Api.GetTransactionResponse> {
   for (let i = 0; i < 30; i++) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error("Transaction confirmation cancelled");
+    }
     const tx = await server.getTransaction(txHash);
     if (tx.status !== "NOT_FOUND") {
       return tx;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, 1000);
+      if (signal) {
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(
+            signal.reason || new Error("Transaction confirmation cancelled"),
+          );
+        };
+        if (signal.aborted) {
+          clearTimeout(timer);
+          return reject(
+            signal.reason || new Error("Transaction confirmation cancelled"),
+          );
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
   }
   throw new Error(`Transaction ${txHash} not found after 30 seconds`);
 }
@@ -383,11 +405,18 @@ async function submitAndConfirm(
   prepared: Transaction,
   phase: string,
   rpcUrl: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    throw signal.reason || new Error(`${phase} cancelled`);
+  }
   let submission: rpc.Api.SendTransactionResponse;
   try {
     submission = await server.sendTransaction(prepared);
   } catch (err: any) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`${phase} cancelled`);
+    }
     throw new Error(
       `${phase} submission failed at ${safeEndpoint(rpcUrl)}: ${scrubEndpoint(String(err?.message ?? err), rpcUrl)}`,
     );
@@ -413,7 +442,7 @@ async function submitAndConfirm(
       `${phase} submission returned an invalid response (status=${status}): missing or invalid transaction hash`,
     );
   }
-  const confirmed = await waitForTransaction(server, submission.hash);
+  const confirmed = await waitForTransaction(server, submission.hash, signal);
   if (confirmed.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
     throw new Error(
       `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`,
@@ -467,6 +496,8 @@ export interface RunMeasurementOptions {
   keyFile?: string;
   /** Executable override; otherwise build the bundled pinned helper on Linux x64. */
   helperPath?: string;
+  /** Optional cancellation signal. */
+  signal?: AbortSignal;
 }
 
 export async function runMeasurement(
@@ -488,6 +519,10 @@ export async function runMeasurement(
     opts = fixturesPathOrOptions;
   }
 
+  if (opts.signal?.aborted) {
+    throw opts.signal.reason || new Error("Measurement cancelled by caller");
+  }
+
   const effectiveRpcUrl = opts.rpcUrl ?? DEFAULT_RPC_URL;
   const fixturesDir = path.dirname(path.resolve(opts.fixturesPath));
   const keyFile = opts.keyFile ?? path.join(fixturesDir, ".weighin-temp-key");
@@ -500,7 +535,11 @@ export async function runMeasurement(
   );
 
   const server = new rpc.Server(effectiveRpcUrl, { allowHttp: true });
-  const deployer = await getOrInitAccount(keyFile, effectiveRpcUrl);
+  const deployer = await getOrInitAccount(
+    keyFile,
+    effectiveRpcUrl,
+    opts.signal,
+  );
   const deployerAddress = Address.fromString(deployer.publicKey());
 
   const results: ContractBenchmark[] = [];
@@ -565,6 +604,7 @@ export async function runMeasurement(
         preparedUpload,
         "WASM upload",
         effectiveRpcUrl,
+        opts.signal,
       );
 
       console.log(`WASM installed. Deploying contract instance...`);
@@ -592,6 +632,7 @@ export async function runMeasurement(
         preparedCreate,
         "contract creation",
         effectiveRpcUrl,
+        opts.signal,
       );
       console.log(`Deployed at ${contractId}`);
     } else {
@@ -602,6 +643,11 @@ export async function runMeasurement(
 
     // 3. Simulate invocations
     for (const invokeSpec of contractSpec.invocations) {
+      if (opts.signal?.aborted) {
+        throw (
+          opts.signal.reason || new Error("Measurement cancelled by caller")
+        );
+      }
       console.log(`Simulating ${invokeSpec.function_name}...`);
       const account = await server.getAccount(deployer.publicKey());
       const argsSc = invokeSpec.args.map(toScVal);
@@ -637,6 +683,7 @@ export async function runMeasurement(
         effectiveRpcUrl,
         invokeTx,
         helperPath,
+        { signal: opts.signal },
       );
       const metrics = metricsFromSimulation(output, limits);
 

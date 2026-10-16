@@ -52537,7 +52537,10 @@ var RETRY_MS = 2e3;
 var TRANSIENT_HTTP = /* @__PURE__ */ new Set([429, 500, 502, 503, 504]);
 var TemporaryReadinessError = class extends Error {
 };
-async function ensureAccountReady(rpcUrl, publicKey) {
+async function ensureAccountReady(rpcUrl, publicKey, signal) {
+  if (signal?.aborted) {
+    throw signal.reason || new Error("Account readiness cancelled");
+  }
   let base;
   try {
     base = new URL(rpcUrl);
@@ -52559,13 +52562,17 @@ async function ensureAccountReady(rpcUrl, publicKey) {
   let funded = false, lastError = "account has not appeared in RPC";
   async function request3(url, options = {}) {
     try {
+      if (signal?.aborted)
+        throw signal.reason || new Error("Account readiness cancelled");
       if (Date.now() >= deadline)
         throw new TemporaryReadinessError("readiness deadline elapsed");
+      const timeoutSignal = AbortSignal.timeout(
+        Math.max(1, Math.min(REQUEST_MS, deadline - Date.now()))
+      );
+      const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
       const response = await fetch(url, {
         ...options,
-        signal: AbortSignal.timeout(
-          Math.max(1, Math.min(REQUEST_MS, deadline - Date.now()))
-        )
+        signal: combinedSignal
       });
       if (!response.ok) {
         void response.body?.cancel().catch(() => {
@@ -52577,6 +52584,8 @@ async function ensureAccountReady(rpcUrl, publicKey) {
       }
       return await response.text();
     } catch (error2) {
+      if (signal?.aborted)
+        throw signal.reason || new Error("Account readiness cancelled");
       if (error2 instanceof TemporaryReadinessError) throw error2;
       if (error2 instanceof TypeError || ["TimeoutError", "AbortError"].includes(error2?.name)) {
         throw new TemporaryReadinessError(
@@ -52587,6 +52596,8 @@ async function ensureAccountReady(rpcUrl, publicKey) {
     }
   }
   while (Date.now() < deadline) {
+    if (signal?.aborted)
+      throw signal.reason || new Error("Account readiness cancelled");
     try {
       const response = await request3(rpcUrl, {
         method: "POST",
@@ -52624,16 +52635,33 @@ async function ensureAccountReady(rpcUrl, publicKey) {
       }
       lastError = "funded account has not appeared in RPC";
     } catch (error2) {
+      if (signal?.aborted)
+        throw signal.reason || new Error("Account readiness cancelled");
       if (!(error2 instanceof TemporaryReadinessError) && !["TimeoutError", "AbortError"].includes(error2?.name))
         throw error2;
       lastError = error2.message;
       console.warn(`Account readiness retry: ${lastError}`);
     }
+    if (signal?.aborted)
+      throw signal.reason || new Error("Account readiness cancelled");
     const remaining = deadline - Date.now();
     if (remaining > 0)
-      await new Promise(
-        (resolve6) => setTimeout(resolve6, Math.min(RETRY_MS, remaining))
-      );
+      await new Promise((resolve6, reject) => {
+        const timer = setTimeout(resolve6, Math.min(RETRY_MS, remaining));
+        if (signal) {
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(signal.reason || new Error("Account readiness cancelled"));
+          };
+          if (signal.aborted) {
+            clearTimeout(timer);
+            return reject(
+              signal.reason || new Error("Account readiness cancelled")
+            );
+          }
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      });
   }
   throw new Error(
     `Account readiness failed within ${DEADLINE_MS / 1e3}s: ${lastError}`
@@ -52672,22 +52700,38 @@ var outputSchema = external_exports.object({
   contract_events_xdr: external_exports.array(encoded),
   modified_entries: integer
 }).strict();
-function execute(file, args, input, cwd) {
+function execute(file, args, input, cwd, signal) {
   return new Promise((resolve6, reject) => {
+    if (signal?.aborted) {
+      return reject(
+        signal.reason || new Error("Simulation helper execution cancelled")
+      );
+    }
     const child = (0, import_child_process.execFile)(
       file,
       args,
       {
         cwd,
         timeout: input === void 0 ? 6e5 : 3e4,
-        maxBuffer: 16 * 1024 * 1024
+        maxBuffer: 16 * 1024 * 1024,
+        signal
       },
       (error2, stdout, stderr) => {
-        if (error2)
+        if (signal?.aborted) {
           reject(
-            new Error(`Simulation helper failed: ${stderr || error2.message}`)
+            signal.reason || new Error("Simulation helper execution cancelled")
           );
-        else resolve6(stdout);
+        } else if (error2) {
+          if (error2.name === "AbortError" || error2.code === "ABORT_ERR") {
+            reject(
+              signal?.reason || new Error("Simulation helper execution cancelled")
+            );
+          } else {
+            reject(
+              new Error(`Simulation helper failed: ${stderr || error2.message}`)
+            );
+          }
+        } else resolve6(stdout);
       }
     );
     child.stdin?.on("error", () => {
@@ -52754,8 +52798,14 @@ async function resolveSimulationHelper(explicitPath, customBuild) {
   }
   return provisioned;
 }
-async function simulateSnapshot(input, helperPath) {
-  const stdout = await execute(helperPath, [], JSON.stringify(input));
+async function simulateSnapshot(input, helperPath, signal) {
+  const stdout = await execute(
+    helperPath,
+    [],
+    JSON.stringify(input),
+    void 0,
+    signal
+  );
   let output;
   try {
     output = outputSchema.parse(JSON.parse(stdout));
@@ -52883,16 +52933,24 @@ function isTransientLedgerRead(failure) {
   const error2 = failure.rpcError;
   return error2?.code === -32603 && error2?.message === "could not query captive core: http request failed with non-200 status code (404)";
 }
-async function callRpc(rpcUrl, method, params) {
+async function callRpc(rpcUrl, method, params, signal) {
+  if (signal?.aborted) {
+    throw signal.reason || new Error(`RPC ${method} cancelled`);
+  }
   let response;
+  const timeoutSignal = AbortSignal.timeout(3e4);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
   try {
     response = await fetch(rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      signal: AbortSignal.timeout(3e4)
+      signal: combinedSignal
     });
   } catch (error2) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`RPC ${method} cancelled`);
+    }
     throw new Error(
       `RPC ${method} transport failure at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(error2?.message ?? error2), rpcUrl)}`
     );
@@ -52906,8 +52964,12 @@ async function callRpc(rpcUrl, method, params) {
     throw new RpcError(method, body.error, rpcUrl);
   return body.result;
 }
-async function measureInvocation(rpcUrl, transaction, helperPath) {
-  const network = external_exports.object({ passphrase: encoded, protocolVersion: integer }).parse(await callRpc(rpcUrl, "getNetwork", {}));
+async function measureInvocation(rpcUrl, transaction, helperPath, options) {
+  const signal = options?.signal;
+  if (signal?.aborted) {
+    throw signal.reason || new Error("Measurement cancelled");
+  }
+  const network = external_exports.object({ passphrase: encoded, protocolVersion: integer }).parse(await callRpc(rpcUrl, "getNetwork", {}, signal));
   if (network.protocolVersion !== 28)
     throw new Error(
       `Unsupported protocol ${network.protocolVersion}: simulation helper supports 28`
@@ -52923,9 +52985,17 @@ async function measureInvocation(rpcUrl, transaction, helperPath) {
   };
   let discoveredKeysCount = 0;
   for (let attempt = 0; attempt < 30; attempt++) {
-    const raw = await callRpc(rpcUrl, "simulateTransaction", {
-      transaction: transaction.toXDR()
-    });
+    if (signal?.aborted) {
+      throw signal.reason || new Error("Measurement cancelled");
+    }
+    const raw = await callRpc(
+      rpcUrl,
+      "simulateTransaction",
+      {
+        transaction: transaction.toXDR()
+      },
+      signal
+    );
     const error2 = raw.error;
     if (error2) throw new Error(`RPC simulation failed: ${error2}`);
     const simulation = simulationSchema.parse(raw);
@@ -52942,10 +53012,18 @@ async function measureInvocation(rpcUrl, transaction, helperPath) {
     const rows = /* @__PURE__ */ new Map();
     let drift = false;
     for (let offset = 0; offset < requested.length; offset += 200) {
+      if (signal?.aborted) {
+        throw signal.reason || new Error("Measurement cancelled");
+      }
       const batch = requested.slice(offset, offset + 200);
       let rawEntries;
       try {
-        rawEntries = await callRpc(rpcUrl, "getLedgerEntries", { keys: batch });
+        rawEntries = await callRpc(
+          rpcUrl,
+          "getLedgerEntries",
+          { keys: batch },
+          signal
+        );
       } catch (failure) {
         if (!isTransientLedgerRead(failure)) throw failure;
         transientReadFailures++;
@@ -52960,7 +53038,22 @@ async function measureInvocation(rpcUrl, transaction, helperPath) {
         console.warn(
           `Transient captive-core ledger-read failure; discarding snapshot and retrying capture (${transientReadFailures}/3, ${delay}ms): ${failure instanceof Error ? failure.message : failure}`
         );
-        await new Promise((resolve6) => setTimeout(resolve6, delay));
+        await new Promise((resolve6, reject) => {
+          const timer = setTimeout(resolve6, delay);
+          if (signal) {
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(signal.reason || new Error("Measurement cancelled"));
+            };
+            if (signal.aborted) {
+              clearTimeout(timer);
+              return reject(
+                signal.reason || new Error("Measurement cancelled")
+              );
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
         drift = true;
         break;
       }
@@ -52988,10 +53081,15 @@ async function measureInvocation(rpcUrl, transaction, helperPath) {
     const headers = external_exports.object({
       ledgers: external_exports.array(external_exports.object({ sequence: integer, headerXdr: encoded }))
     }).parse(
-      await callRpc(rpcUrl, "getLedgers", {
-        startLedger: simulation.latestLedger,
-        pagination: { limit: 1 }
-      })
+      await callRpc(
+        rpcUrl,
+        "getLedgers",
+        {
+          startLedger: simulation.latestLedger,
+          pagination: { limit: 1 }
+        },
+        signal
+      )
     );
     const row = headers.ledgers.find(
       (item) => item.sequence === simulation.latestLedger
@@ -53029,7 +53127,7 @@ async function measureInvocation(rpcUrl, transaction, helperPath) {
     };
     let output;
     try {
-      output = await simulateSnapshot(input, helperPath);
+      output = await simulateSnapshot(input, helperPath, signal);
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : String(failure);
       const missing = [
@@ -53315,7 +53413,7 @@ function calculateContractId(deployerAddress, salt) {
   const contractIdBytes = hash(hashIdPreimage.toXDR());
   return StrKey.encodeContract(contractIdBytes);
 }
-async function getOrInitAccount(keyFile, rpcUrl) {
+async function getOrInitAccount(keyFile, rpcUrl, signal) {
   let keypair;
   if (fs2.existsSync(keyFile)) {
     const secret = fs2.readFileSync(keyFile, "utf8").trim();
@@ -53324,16 +53422,36 @@ async function getOrInitAccount(keyFile, rpcUrl) {
     keypair = Keypair.random();
     fs2.writeFileSync(keyFile, keypair.secret(), { mode: 384 });
   }
-  await ensureAccountReady(rpcUrl, keypair.publicKey());
+  await ensureAccountReady(rpcUrl, keypair.publicKey(), signal);
   return keypair;
 }
-async function waitForTransaction(server, txHash) {
+async function waitForTransaction(server, txHash, signal) {
   for (let i = 0; i < 30; i++) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error("Transaction confirmation cancelled");
+    }
     const tx = await server.getTransaction(txHash);
     if (tx.status !== "NOT_FOUND") {
       return tx;
     }
-    await new Promise((resolve6) => setTimeout(resolve6, 1e3));
+    await new Promise((resolve6, reject) => {
+      const timer = setTimeout(resolve6, 1e3);
+      if (signal) {
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(
+            signal.reason || new Error("Transaction confirmation cancelled")
+          );
+        };
+        if (signal.aborted) {
+          clearTimeout(timer);
+          return reject(
+            signal.reason || new Error("Transaction confirmation cancelled")
+          );
+        }
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    });
   }
   throw new Error(`Transaction ${txHash} not found after 30 seconds`);
 }
@@ -53359,11 +53477,17 @@ function scrubEndpoint(message, rpcUrl) {
 function hashLabel(hash2) {
   return isTransactionHash(hash2) ? hash2 : "none";
 }
-async function submitAndConfirm(server, prepared, phase, rpcUrl) {
+async function submitAndConfirm(server, prepared, phase, rpcUrl, signal) {
+  if (signal?.aborted) {
+    throw signal.reason || new Error(`${phase} cancelled`);
+  }
   let submission;
   try {
     submission = await server.sendTransaction(prepared);
   } catch (err) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`${phase} cancelled`);
+    }
     throw new Error(
       `${phase} submission failed at ${safeEndpoint(rpcUrl)}: ${scrubEndpoint(String(err?.message ?? err), rpcUrl)}`
     );
@@ -53389,7 +53513,7 @@ async function submitAndConfirm(server, prepared, phase, rpcUrl) {
       `${phase} submission returned an invalid response (status=${status}): missing or invalid transaction hash`
     );
   }
-  const confirmed = await waitForTransaction(server, submission.hash);
+  const confirmed = await waitForTransaction(server, submission.hash, signal);
   if (confirmed.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
     throw new Error(
       `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`
@@ -53424,6 +53548,9 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
   } else {
     opts = fixturesPathOrOptions;
   }
+  if (opts.signal?.aborted) {
+    throw opts.signal.reason || new Error("Measurement cancelled by caller");
+  }
   const effectiveRpcUrl = opts.rpcUrl ?? DEFAULT_RPC_URL;
   const fixturesDir = path3.dirname(path3.resolve(opts.fixturesPath));
   const keyFile = opts.keyFile ?? path3.join(fixturesDir, ".weighin-temp-key");
@@ -53433,7 +53560,11 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
     opts.fixtureId ?? path3.relative(process.cwd(), path3.resolve(opts.fixturesPath))
   );
   const server = new rpc_exports.Server(effectiveRpcUrl, { allowHttp: true });
-  const deployer = await getOrInitAccount(keyFile, effectiveRpcUrl);
+  const deployer = await getOrInitAccount(
+    keyFile,
+    effectiveRpcUrl,
+    opts.signal
+  );
   const deployerAddress = Address.fromString(deployer.publicKey());
   const results = [];
   for (const contractSpec of fixturesSpec.contracts) {
@@ -53484,7 +53615,8 @@ Build the contract before running measurements.`
         server,
         preparedUpload,
         "WASM upload",
-        effectiveRpcUrl
+        effectiveRpcUrl,
+        opts.signal
       );
       console.log(`WASM installed. Deploying contract instance...`);
       account = await server.getAccount(deployer.publicKey());
@@ -53504,7 +53636,8 @@ Build the contract before running measurements.`
         server,
         preparedCreate,
         "contract creation",
-        effectiveRpcUrl
+        effectiveRpcUrl,
+        opts.signal
       );
       console.log(`Deployed at ${contractId}`);
     } else {
@@ -53512,6 +53645,9 @@ Build the contract before running measurements.`
     }
     const benchmarks = [];
     for (const invokeSpec of contractSpec.invocations) {
+      if (opts.signal?.aborted) {
+        throw opts.signal.reason || new Error("Measurement cancelled by caller");
+      }
       console.log(`Simulating ${invokeSpec.function_name}...`);
       const account = await server.getAccount(deployer.publicKey());
       const argsSc = invokeSpec.args.map(toScVal);
@@ -53540,7 +53676,8 @@ Build the contract before running measurements.`
       const { output, provenance, limits } = await measureInvocation(
         effectiveRpcUrl,
         invokeTx,
-        helperPath
+        helperPath,
+        { signal: opts.signal }
       );
       const metrics = metricsFromSimulation(output, limits);
       benchmarks.push({
