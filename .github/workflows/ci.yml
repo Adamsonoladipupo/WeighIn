@@ -62,6 +62,7 @@ jobs:
           # Pin to the same channel declared in rust-toolchain.toml
           toolchain: "1.95.0"
           targets: wasm32v1-none
+          components: rustfmt
 
       - name: Cache native simulation helper
         uses: actions/cache@v4
@@ -95,6 +96,7 @@ jobs:
 
       - name: Test measurement adapter and native source
         run: |
+          cargo +1.95.0 fmt --check --manifest-path native/simulation/Cargo.toml
           npm test
           npm run test:native
           npm run bundle
