@@ -215,202 +215,220 @@ async function upsertPrComment(token: string, body: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function run(): Promise<void> {
-  const fixturesPathRel = core.getInput("fixtures-path", { required: true });
-  const configPathRel = core.getInput("config-path");
-  const rpcUrl = core.getInput("rpc-url") || "http://localhost:8000/rpc";
-  const githubToken = core.getInput("github-token");
-  const baseRefInput = core.getInput("base-ref");
-  const rustToolchain = core.getInput("rust-toolchain");
-  const reportPathInput = core.getInput("report-path");
-  const metadataPathInput = core.getInput("metadata-path");
-  const buildCommand = core.getInput("build-command");
-  const skipBuild = core.getInput("skip-build") === "true";
+  let keyDir: string | null = null;
+  let sharedKeyFile: string | null = null;
 
-  // The runner's checkout of the PR head is at GITHUB_WORKSPACE
-  const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
-
-  const baseRef =
-    baseRefInput || github.context.payload.pull_request?.base?.ref || "main";
-
-  // Key file lives outside either worktree so both measurements share it
-  const sharedKeyFile = path.join(os.tmpdir(), "weighin-deployer.key");
-
-  core.info(`Base ref:   ${baseRef}`);
-  core.info(`RPC URL:    ${rpcUrl}`);
-  core.info(`Fixtures:   ${fixturesPathRel}`);
-  core.info(`Key file:   ${sharedKeyFile}`);
-
-  // 1. RPC health check — fail fast with a clear message
-  await assertRpcHealthy(rpcUrl);
-
-  // 2. Resolve paths from the HEAD workspace (fixtures, config live there)
-  const headFixturesPath = path.resolve(headWorkspace, fixturesPathRel);
-  const fixtureId = path.relative(headWorkspace, headFixturesPath);
-  const configPath = path.resolve(
-    headWorkspace,
-    configPathRel || "weighin.toml",
-  );
-  const config = loadConfig(configPath);
-
-  if (!fs.existsSync(headFixturesPath)) {
-    throw new Error(`fixtures-path not found: ${headFixturesPath}`);
-  }
-
-  // 3. Measure HEAD (the PR branch — already checked out at headWorkspace)
-  core.startGroup("Building + measuring HEAD");
-  const headSha = await getHeadSha(headWorkspace);
-  core.info(`HEAD SHA: ${headSha}`);
-
-  let headResults: ContractBenchmark[];
   try {
-    await buildForRevision(
-      headFixturesPath,
+    const fixturesPathRel = core.getInput("fixtures-path", { required: true });
+    const configPathRel = core.getInput("config-path");
+    const rpcUrl = core.getInput("rpc-url") || "http://localhost:8000/rpc";
+    const githubToken = core.getInput("github-token");
+    const baseRefInput = core.getInput("base-ref");
+    const rustToolchain = core.getInput("rust-toolchain");
+    const reportPathInput = core.getInput("report-path");
+    const metadataPathInput = core.getInput("metadata-path");
+    const buildCommand = core.getInput("build-command");
+    const skipBuild = core.getInput("skip-build") === "true";
+
+    // The runner's checkout of the PR head is at GITHUB_WORKSPACE
+    const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
+
+    const baseRef =
+      baseRefInput || github.context.payload.pull_request?.base?.ref || "main";
+
+    keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "weighin-key-"));
+    fs.chmodSync(keyDir, 0o700);
+    sharedKeyFile = path.join(keyDir, "weighin-deployer.key");
+
+    core.info(`Base ref:   ${baseRef}`);
+    core.info(`RPC URL:    ${rpcUrl}`);
+    core.info(`Fixtures:   ${fixturesPathRel}`);
+    core.info(`Key file:   ${sharedKeyFile}`);
+
+    // 1. RPC health check — fail fast with a clear message
+    await assertRpcHealthy(rpcUrl);
+
+    // 2. Resolve paths from the HEAD workspace (fixtures, config live there)
+    const headFixturesPath = path.resolve(headWorkspace, fixturesPathRel);
+    const fixtureId = path.relative(headWorkspace, headFixturesPath);
+    const configPath = path.resolve(
       headWorkspace,
-      rustToolchain,
-      buildCommand,
-      skipBuild,
+      configPathRel || "weighin.toml",
     );
-    headResults = await runMeasurement({
-      fixturesPath: headFixturesPath,
-      fixtureId,
-      gitCommit: headSha,
-      sdkVersion: getSdkVersion(headWorkspace),
-      rpcUrl,
-      keyFile: sharedKeyFile,
-    });
-  } catch (err: any) {
-    throw new Error(`HEAD measurement failed: ${err.message}`);
-  } finally {
-    core.endGroup();
-  }
+    const config = loadConfig(configPath);
 
-  // Log WASM hashes from HEAD for the determinism audit trail
-  for (const contract of headResults) {
-    for (const bench of contract.benchmarks) {
-      core.info(
-        `[HEAD] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`,
-      );
+    if (!fs.existsSync(headFixturesPath)) {
+      throw new Error(`fixtures-path not found: ${headFixturesPath}`);
     }
-  }
 
-  // 4. Check out base ref into a separate worktree — never touch headWorkspace
-  core.startGroup(`Building + measuring base (${baseRef})`);
-  let baseResults: ContractBenchmark[] | null = null;
-  let baseDir: string | null = null;
-  let baseSha = "unknown";
+    // 3. Measure HEAD (the PR branch — already checked out at headWorkspace)
+    core.startGroup("Building + measuring HEAD");
+    const headSha = await getHeadSha(headWorkspace);
+    core.info(`HEAD SHA: ${headSha}`);
 
-  try {
-    const checkout = await checkoutRef(headWorkspace, baseRef, "base");
-    baseDir = checkout.dir;
-    baseSha = checkout.sha;
-
-    // The fixtures file in the base worktree — same relative path
-    const baseFixturesPath = path.resolve(baseDir, fixturesPathRel);
-    if (!fs.existsSync(baseFixturesPath)) {
-      throw new Error("fixtures-path not found in base ref");
-    } else {
+    let headResults: ContractBenchmark[];
+    try {
       await buildForRevision(
-        baseFixturesPath,
-        baseDir,
+        headFixturesPath,
+        headWorkspace,
         rustToolchain,
         buildCommand,
         skipBuild,
       );
-      baseResults = await runMeasurement({
-        fixturesPath: baseFixturesPath,
+      headResults = await runMeasurement({
+        fixturesPath: headFixturesPath,
         fixtureId,
-        gitCommit: baseSha,
-        sdkVersion: getSdkVersion(baseDir),
+        gitCommit: headSha,
+        sdkVersion: getSdkVersion(headWorkspace),
         rpcUrl,
         keyFile: sharedKeyFile,
       });
+    } catch (err: any) {
+      throw new Error(`HEAD measurement failed: ${err.message}`);
+    } finally {
+      core.endGroup();
+    }
 
-      // Log WASM hashes from base
-      for (const contract of baseResults) {
-        for (const bench of contract.benchmarks) {
-          core.info(
-            `[BASE] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`,
-          );
-        }
+    // Log WASM hashes from HEAD for the determinism audit trail
+    for (const contract of headResults) {
+      for (const bench of contract.benchmarks) {
+        core.info(
+          `[HEAD] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`,
+        );
       }
     }
-  } catch (err: any) {
-    throw new Error(
-      `Required BASE comparison failed: ${err.message}. Policies were not evaluated.`,
-    );
-  } finally {
-    if (baseDir) await removeWorktree(headWorkspace, baseDir);
-    core.endGroup();
-  }
 
-  if (!baseResults)
-    throw new Error(
-      "Required BASE comparison unavailable. Policies were not evaluated.",
-    );
+    // 4. Check out base ref into a separate worktree — never touch headWorkspace
+    core.startGroup(`Building + measuring base (${baseRef})`);
+    let baseResults: ContractBenchmark[] | null = null;
+    let baseDir: string | null = null;
+    let baseSha = "unknown";
 
-  // 6. Diff
-  core.startGroup("Computing diff");
-  const diff: DiffResult = diffBenchmarks(baseResults, headResults);
-  if (!diff.contracts.some((contract) => contract.functions.length > 0)) {
-    throw new Error(
-      "No matched BASE/HEAD benchmarks; comparison and policies were not evaluated.",
-    );
-  }
-  core.info(`Any regression: ${diff.hasRegression}`);
-  core.endGroup();
+    try {
+      const checkout = await checkoutRef(headWorkspace, baseRef, "base");
+      baseDir = checkout.dir;
+      baseSha = checkout.sha;
 
-  // 7. Threshold enforcement
-  core.startGroup("Enforcing thresholds");
-  if (config) {
-    core.info("weighin.toml loaded");
-  } else {
-    core.info("No weighin.toml found — no thresholds enforced");
-  }
-  const violations: Violation[] = enforceThresholds(diff, config);
-  core.info(`Violations: ${violations.length}`);
-  for (const v of violations) {
-    core.error(
-      `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
-    );
-  }
-  core.endGroup();
+      // The fixtures file in the base worktree — same relative path
+      const baseFixturesPath = path.resolve(baseDir, fixturesPathRel);
+      if (!fs.existsSync(baseFixturesPath)) {
+        throw new Error("fixtures-path not found in base ref");
+      } else {
+        await buildForRevision(
+          baseFixturesPath,
+          baseDir,
+          rustToolchain,
+          buildCommand,
+          skipBuild,
+        );
+        baseResults = await runMeasurement({
+          fixturesPath: baseFixturesPath,
+          fixtureId,
+          gitCommit: baseSha,
+          sdkVersion: getSdkVersion(baseDir),
+          rpcUrl,
+          keyFile: sharedKeyFile,
+        });
 
-  // 8. Outputs
-  const result = violations.length > 0 ? "fail" : "pass";
-  core.setOutput("result", result);
-  core.setOutput("diff-json", JSON.stringify(diff));
+        // Log WASM hashes from base
+        for (const contract of baseResults) {
+          for (const bench of contract.benchmarks) {
+            core.info(
+              `[BASE] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`,
+            );
+          }
+        }
+      }
+    } catch (err: any) {
+      throw new Error(
+        `Required BASE comparison failed: ${err.message}. Policies were not evaluated.`,
+      );
+    } finally {
+      if (baseDir) await removeWorktree(headWorkspace, baseDir);
+      core.endGroup();
+    }
 
-  // Report is available in the job summary even without permission to post a PR comment.
-  const body = renderComment(diff, violations, baseRef, headSha);
-  if (process.env.GITHUB_STEP_SUMMARY) await core.summary.addRaw(body).write();
-  if (reportPathInput) writeReportFile(reportPathInput, headWorkspace, body);
-  if (metadataPathInput) {
-    const prNumber = github.context.payload.pull_request?.number;
-    if (prNumber) {
-      const destination = path.resolve(headWorkspace, metadataPathInput);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.writeFileSync(
-        destination,
-        JSON.stringify({ prNumber, headSha }, null, 2),
-        "utf8",
+    if (!baseResults)
+      throw new Error(
+        "Required BASE comparison unavailable. Policies were not evaluated.",
+      );
+
+    // 6. Diff
+    core.startGroup("Computing diff");
+    const diff: DiffResult = diffBenchmarks(baseResults, headResults);
+    if (!diff.contracts.some((contract) => contract.functions.length > 0)) {
+      throw new Error(
+        "No matched BASE/HEAD benchmarks; comparison and policies were not evaluated.",
       );
     }
-  }
+    core.info(`Any regression: ${diff.hasRegression}`);
+    core.endGroup();
 
-  // 9. PR comment
-  if (githubToken) {
-    core.startGroup("Posting PR comment");
-    try {
-      await upsertPrComment(githubToken, body);
-    } catch (err: any) {
-      core.warning(`Failed to post PR comment: ${err.message}`);
+    // 7. Threshold enforcement
+    core.startGroup("Enforcing thresholds");
+    if (config) {
+      core.info("weighin.toml loaded");
+    } else {
+      core.info("No weighin.toml found — no thresholds enforced");
+    }
+    const violations: Violation[] = enforceThresholds(diff, config);
+    core.info(`Violations: ${violations.length}`);
+    for (const v of violations) {
+      core.error(
+        `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
+      );
     }
     core.endGroup();
-  }
 
-  // 10. Exit status
-  if (violations.length > 0) {
-    core.setFailed(`${violations.length} threshold violation(s) detected`);
+    // 8. Outputs
+    const result = violations.length > 0 ? "fail" : "pass";
+    core.setOutput("result", result);
+    core.setOutput("diff-json", JSON.stringify(diff));
+
+    // Report is available in the job summary even without permission to post a PR comment.
+    const body = renderComment(diff, violations, baseRef, headSha);
+    if (process.env.GITHUB_STEP_SUMMARY)
+      await core.summary.addRaw(body).write();
+    if (reportPathInput) writeReportFile(reportPathInput, headWorkspace, body);
+    if (metadataPathInput) {
+      const prNumber = github.context.payload.pull_request?.number;
+      if (prNumber) {
+        const destination = path.resolve(headWorkspace, metadataPathInput);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.writeFileSync(
+          destination,
+          JSON.stringify({ prNumber, headSha }, null, 2),
+          "utf8",
+        );
+      }
+    }
+
+    // 9. PR comment
+    if (githubToken) {
+      core.startGroup("Posting PR comment");
+      try {
+        await upsertPrComment(githubToken, body);
+      } catch (err: any) {
+        core.warning(`Failed to post PR comment: ${err.message}`);
+      }
+      core.endGroup();
+    }
+
+    // 10. Exit status
+    if (violations.length > 0) {
+      core.setFailed(`${violations.length} threshold violation(s) detected`);
+    }
+  } finally {
+    if (keyDir) {
+      try {
+        fs.rmSync(keyDir, { recursive: true, force: true });
+        core.info(`Removed owned deployer key directory: ${keyDir}`);
+      } catch (err: any) {
+        core.warning(
+          `Could not remove deployer key directory ${keyDir}: ${err.message}`,
+        );
+      }
+    }
   }
 }
 
