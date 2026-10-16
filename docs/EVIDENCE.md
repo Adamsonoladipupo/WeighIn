@@ -379,6 +379,16 @@ as a passing benchmark. The [security review](DEPENDENCY_SECURITY.md) identifies
 the dependency updates. The publication validation above verifies the patched
 public revision now used by consumer pins.
 
+## Distinct benchmark contracts control validation
+
+The [distinct contracts control proof](distinct-contracts-control.md) validates two
+genuinely distinct contract WASMs with overlapping function and case labels (`hello` / `id:world`)
+and explicit logical identities (`id:contract-alpha` and `id:contract-beta`).
+Durable evidence in [distinct-contracts-control](experiments/distinct-contracts-control/)
+verifies that both contracts pair independently with zero control deltas across all 8
+comparable metrics, with complete return parity and verifier rejection of swapped or missing
+identities. This independent deployment proof remains distinct from stateful caller/callee proofs.
+
 ## Known boundaries
 
 See [Known limitations](KNOWN_LIMITATIONS.md). [Hosted external validation](hosted-soroban-forge.md)

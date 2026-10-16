@@ -469,6 +469,19 @@ export async function measureInvocation(
     );
   const keys = new Set(configKeys);
   let transientReadFailures = 0;
+  let lastCause:
+    | "ledger_drift"
+    | "batch_ledger_disagreement"
+    | "newly_discovered_keys"
+    | "transient_read"
+    | "none" = "none";
+  const causes = {
+    ledger_drift: 0,
+    batch_ledger_disagreement: 0,
+    newly_discovered_keys: 0,
+    transient_read: 0,
+  };
+  let discoveredKeysCount = 0;
   for (let attempt = 0; attempt < 30; attempt++) {
     const raw = await callRpc(rpcUrl, "simulateTransaction", {
       transaction: transaction.toXDR(),
@@ -499,6 +512,8 @@ export async function measureInvocation(
       } catch (failure) {
         if (!isTransientLedgerRead(failure)) throw failure;
         transientReadFailures++;
+        lastCause = "transient_read";
+        causes.transient_read++;
         if (transientReadFailures > 3 || attempt === 29) {
           throw new Error(
             `Snapshot ledger-read retry limit exhausted: ${failure instanceof Error ? failure.message : failure}`,
@@ -514,6 +529,13 @@ export async function measureInvocation(
       }
       const result = entriesSchema.parse(rawEntries);
       if (result.latestLedger !== simulation.latestLedger) {
+        if (offset === 0) {
+          lastCause = "ledger_drift";
+          causes.ledger_drift++;
+        } else {
+          lastCause = "batch_ledger_disagreement";
+          causes.batch_ledger_disagreement++;
+        }
         drift = true;
         break;
       }
@@ -595,6 +617,9 @@ export async function measureInvocation(
       ].map((match) => match[1]);
       const additional = missing.filter((key) => !keys.has(key));
       if (!additional.length) throw failure;
+      lastCause = "newly_discovered_keys";
+      causes.newly_discovered_keys++;
+      discoveredKeysCount += additional.length;
       for (const key of additional) {
         xdr.LedgerKey.fromXDR(key, "base64");
         keys.add(key);
@@ -611,14 +636,37 @@ export async function measureInvocation(
           event.event().type().name !== "diagnostic",
       )
       .map((event) => event.event().toXDR("base64"));
-    if (
-      output.transaction_data_xdr !== simulation.transactionData ||
-      output.retval_xdr !== simulation.results[0].xdr ||
-      JSON.stringify(output.contract_events_xdr) !== JSON.stringify(rpcEvents)
-    ) {
-      throw new Error(
-        "Local simulation disagrees with RPC at captured ledger; auth/random/state-dependent invocation is unsupported",
+    const txDataMismatch =
+      output.transaction_data_xdr !== simulation.transactionData;
+    const retvalMismatch = output.retval_xdr !== simulation.results[0].xdr;
+    const eventsMismatch =
+      JSON.stringify(output.contract_events_xdr) !== JSON.stringify(rpcEvents);
+    if (txDataMismatch || retvalMismatch || eventsMismatch) {
+      const mismatches: string[] = [];
+      if (txDataMismatch) {
+        mismatches.push(
+          `transaction-data disagreement (native_sha256: ${sha256(output.transaction_data_xdr)}, rpc_sha256: ${sha256(simulation.transactionData)})`,
+        );
+      }
+      if (retvalMismatch) {
+        mismatches.push(
+          `return-value disagreement (native_sha256: ${sha256(output.retval_xdr)}, rpc_sha256: ${sha256(simulation.results[0].xdr)})`,
+        );
+      }
+      if (eventsMismatch) {
+        mismatches.push(
+          `ordered charged-event disagreement (native_count: ${output.contract_events_xdr.length}, rpc_count: ${rpcEvents.length}, native_sha256: ${sha256(JSON.stringify(output.contract_events_xdr))}, rpc_sha256: ${sha256(JSON.stringify(rpcEvents))})`,
+        );
+      }
+      const err = new Error(
+        `Local simulation disagrees with RPC at captured ledger [${mismatches.join("; ")}]; auth/random/state-dependent invocation is unsupported`,
       );
+      (err as any).parityDetails = {
+        transactionData: txDataMismatch,
+        returnValue: retvalMismatch,
+        contractEvents: eventsMismatch,
+      };
+      throw err;
     }
     const limits = snapshotLimits(entries);
     if (
@@ -671,7 +719,15 @@ export async function measureInvocation(
       },
     };
   }
-  throw new Error(
-    "Unable to capture a complete consistent snapshot after 30 attempts",
+  const exhaustionError = new Error(
+    `Unable to capture a complete consistent snapshot after 30 attempts (last cause: ${lastCause}; attempts: 30, ledger_drift: ${causes.ledger_drift}, batch_ledger_disagreement: ${causes.batch_ledger_disagreement}, newly_discovered_keys: ${causes.newly_discovered_keys}, transient_reads: ${causes.transient_read}, tracked_keys: ${keys.size})`,
   );
+  (exhaustionError as any).diagnostics = {
+    lastCause,
+    attempts: 30,
+    causes,
+    trackedKeys: keys.size,
+    discoveredKeysCount,
+  };
+  throw exhaustionError;
 }
