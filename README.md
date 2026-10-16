@@ -117,6 +117,37 @@ to the default branch. It reads report artifacts without executing PR code with
 a write token. The supplied consumer posts only after a successful PR producer;
 failed policy reports remain in artifacts and job summaries.
 
+### PR comment metadata contract
+
+The producer writes a versioned metadata artifact only for pull request events:
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "WeighInNG/WeighIn",
+  "prNumber": 27,
+  "headSha": "f679238a096b49df0edfaf7d02d5bfa2dfd6be8f"
+}
+```
+
+`repository` is the base repository that owns the trusted comment workflow, so a
+fork PR still records the base repository rather than the fork. Before any API
+request the consumer re-validates the version, the trusted repository
+(case-insensitively), a positive integer PR number and a 40-character
+hexadecimal SHA. Malformed JSON, a missing or unsupported `schemaVersion`,
+another repository and malformed PR-number/SHA fields all fail before mutation.
+These checks only validate the artifact shape and repository identity; they do
+not prove the run belongs to the PR.
+
+Producer and consumer versions must be paired. **Producer v1 (this revision)
+requires consumer v1 (this revision), and the v1 consumer rejects legacy
+unversioned metadata; it never infers a missing repository.** The previously
+published immutable pins at `bbbe9001bbd375fd6a1ff75be5da2593c86fff20` remain a
+documented **legacy** producer/consumer pair: that pinned producer emits
+unversioned metadata and that pinned consumer accepts it. The examples here keep
+that verified legacy pin; do not pair a legacy producer with the v1 consumer and
+do not repin these examples to an unverified revision.
+
 ## Configuration
 
 All supported inputs are declared in [action.yml](action.yml):
@@ -131,7 +162,7 @@ All supported inputs are declared in [action.yml](action.yml):
 | `build-command` | Custom shell build command in each revision; replaces default build guarantees |
 | `skip-build` | `true` uses prebuilt fixture WASMs in both revisions; incompatible with `build-command` |
 | `report-path` | Optional Markdown report destination |
-| `metadata-path` | Optional PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
+| `metadata-path` | Optional versioned PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
 | `github-token` | Optional direct PR-comment token; omit for the separate comment workflow |
 
 Outputs: `result` is `pass` or `fail`; `diff-json` contains the comparison.

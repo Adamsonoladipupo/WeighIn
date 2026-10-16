@@ -24,7 +24,8 @@ function shouldRun(condition, run) {
   return terms.every(Boolean);
 }
 const successfulPr = { conclusion: 'success', event: 'pull_request' };
-async function execute(order, includeMetadata = true, run = successfulPr, condition = commentJob.if) {
+const validMetadata = { schemaVersion: 1, repository: 'WeighInNG/WeighIn', prNumber: 27, headSha: 'f'.repeat(40) };
+async function execute(order, metadata = true, run = successfulPr, condition = commentJob.if) {
   if (!shouldRun(condition, run)) return { skipped: true, executedSteps: [], calls: [] };
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'weighin-comment-test-'));
   const workspace = path.join(temporary, 'workspace'), calls = [];
@@ -62,7 +63,11 @@ async function execute(order, includeMetadata = true, run = successfulPr, condit
         assert.equal(step.with['run-id'], '${{ github.event.workflow_run.id }}');
         const post = order.find(step => step.uses === './comment');
         fs.writeFileSync(path.join(workspace, post.with['report-path']), report);
-        if (includeMetadata) fs.writeFileSync(path.join(workspace, post.with['metadata-path']), JSON.stringify({ prNumber: 27 }));
+        if (metadata !== false) {
+          const value = metadata === true ? validMetadata : metadata;
+          const text = typeof value === 'string' ? value : JSON.stringify(value);
+          fs.writeFileSync(path.join(workspace, post.with['metadata-path']), text);
+        }
       } else if (step.uses === './comment') {
         const action = YAML.parse(fs.readFileSync(path.join(workspace, 'comment/action.yml'), 'utf8'));
         result = await new Promise((resolve, reject) => {
@@ -90,6 +95,35 @@ test('comment workflow preserves downloaded report/metadata and sends their cont
   assert.deepEqual(result.calls.map(call => call.method), ['GET', 'POST']);
   assert.equal(result.calls[1].body.body, report);
 });
+test('a case-insensitive repository match is accepted by the bundled consumer', async () => {
+  const result = await execute(steps, { ...validMetadata, repository: 'weighinng/weighin' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.deepEqual(result.calls.map(call => call.method), ['GET', 'POST']);
+  assert.equal(result.calls[1].body.body, report);
+});
+for (const [label, metadata, pattern] of [
+  ['malformed JSON', '{ not json', /not valid JSON/],
+  ['a JSON array', '[]', /must be a JSON object/],
+  ['legacy unversioned metadata', JSON.stringify({ prNumber: 27, headSha: 'f'.repeat(40) }), /Legacy unversioned/],
+  ['an unsupported schema version', JSON.stringify({ ...validMetadata, schemaVersion: 2 }), /Unsupported PR metadata schemaVersion/],
+  ['a string schema version', JSON.stringify({ ...validMetadata, schemaVersion: '1' }), /Unsupported PR metadata schemaVersion/],
+  ['a missing repository', JSON.stringify({ ...validMetadata, repository: undefined }), /repository is missing/],
+  ['a blank repository', JSON.stringify({ ...validMetadata, repository: '  ' }), /repository is missing/],
+  ['another repository', JSON.stringify({ ...validMetadata, repository: 'attacker/WeighIn' }), /does not match trusted repository/],
+  ['a string PR number', JSON.stringify({ ...validMetadata, prNumber: '27' }), /prNumber must be a positive integer/],
+  ['a zero PR number', JSON.stringify({ ...validMetadata, prNumber: 0 }), /prNumber must be a positive integer/],
+  ['a negative PR number', JSON.stringify({ ...validMetadata, prNumber: -3 }), /prNumber must be a positive integer/],
+  ['a fractional PR number', JSON.stringify({ ...validMetadata, prNumber: 1.5 }), /prNumber must be a positive integer/],
+  ['a malformed SHA', JSON.stringify({ ...validMetadata, headSha: 'abc123' }), /headSha must be a 40-character hexadecimal SHA/],
+  ['a non-hex SHA', JSON.stringify({ ...validMetadata, headSha: 'g'.repeat(40) }), /headSha must be a 40-character hexadecimal SHA/],
+]) {
+  test(`the bundled consumer rejects ${label} with zero mutation calls`, async () => {
+    const result = await execute(steps, metadata);
+    assert.equal(result.status, 1, `${label} unexpectedly succeeded`);
+    assert.match(result.stdout + result.stderr, pattern);
+    assert.deepEqual(result.calls, []);
+  });
+}
 test('the historical download-before-checkout order deletes the report and fails before any posting request', async () => {
   const historical = [steps.find(step => step.uses === 'actions/download-artifact@v4'), steps.find(step => step.uses === 'actions/checkout@v4'), steps.find(step => step.uses === './comment')];
   const result = await execute(historical);
