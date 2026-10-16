@@ -53223,6 +53223,65 @@ async function waitForTransaction(server, txHash) {
   }
   throw new Error(`Transaction ${txHash} not found after 30 seconds`);
 }
+var TX_HASH_PATTERN = /^[0-9a-f]{64}$/i;
+function isTransactionHash(value) {
+  return typeof value === "string" && TX_HASH_PATTERN.test(value);
+}
+function safeEndpoint(rpcUrl) {
+  try {
+    const url = new URL(rpcUrl);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[invalid endpoint]";
+  }
+}
+function scrubEndpoint(message, rpcUrl) {
+  return message.split(rpcUrl).join(safeEndpoint(rpcUrl)).replace(/([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, "$1").replace(/([?&][^=&\s]+)=([^&\s]*)/g, "$1=REDACTED");
+}
+function hashLabel(hash2) {
+  return isTransactionHash(hash2) ? hash2 : "none";
+}
+async function submitAndConfirm(server, prepared, phase, rpcUrl) {
+  let submission;
+  try {
+    submission = await server.sendTransaction(prepared);
+  } catch (err) {
+    throw new Error(
+      `${phase} submission failed at ${safeEndpoint(rpcUrl)}: ${scrubEndpoint(String(err?.message ?? err), rpcUrl)}`
+    );
+  }
+  const status = submission?.status;
+  if (status === "ERROR") {
+    throw new Error(
+      `${phase} submission was rejected (status=ERROR, hash=${hashLabel(submission?.hash)})`
+    );
+  }
+  if (status === "TRY_AGAIN_LATER") {
+    throw new Error(
+      `${phase} submission was temporarily rejected (status=TRY_AGAIN_LATER, hash=${hashLabel(submission?.hash)})`
+    );
+  }
+  if (status !== "PENDING" && status !== "DUPLICATE") {
+    throw new Error(
+      `${phase} submission returned an invalid response: unrecognized status "${String(submission?.status)}"`
+    );
+  }
+  if (!isTransactionHash(submission.hash)) {
+    throw new Error(
+      `${phase} submission returned an invalid response (status=${status}): missing or invalid transaction hash`
+    );
+  }
+  const confirmed = await waitForTransaction(server, submission.hash);
+  if (confirmed.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
+    throw new Error(
+      `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`
+    );
+  }
+}
 async function isContractDeployed(server, contractId) {
   try {
     const contractScAddress = Address.fromString(contractId).toScAddress();
@@ -53306,11 +53365,12 @@ Build the contract before running measurements.`
         throw err;
       }
       preparedUpload.sign(deployer);
-      const uploadSend = await server.sendTransaction(preparedUpload);
-      const uploadRes = await waitForTransaction(server, uploadSend.hash);
-      if (uploadRes.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`WASM upload failed: ${JSON.stringify(uploadRes)}`);
-      }
+      await submitAndConfirm(
+        server,
+        preparedUpload,
+        "WASM upload",
+        effectiveRpcUrl
+      );
       console.log(`WASM installed. Deploying contract instance...`);
       account = await server.getAccount(deployer.publicKey());
       const createTx = new TransactionBuilder(account, {
@@ -53325,11 +53385,12 @@ Build the contract before running measurements.`
       ).setTimeout(30).build();
       const preparedCreate = await server.prepareTransaction(createTx);
       preparedCreate.sign(deployer);
-      const createSend = await server.sendTransaction(preparedCreate);
-      const createRes = await waitForTransaction(server, createSend.hash);
-      if (createRes.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Contract deploy failed: ${JSON.stringify(createRes)}`);
-      }
+      await submitAndConfirm(
+        server,
+        preparedCreate,
+        "contract creation",
+        effectiveRpcUrl
+      );
       console.log(`Deployed at ${contractId}`);
     } else {
       console.log(`Already deployed at ${contractId}`);
