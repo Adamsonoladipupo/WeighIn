@@ -53289,6 +53289,65 @@ async function waitForTransaction(server, txHash) {
   }
   throw new Error(`Transaction ${txHash} not found after 30 seconds`);
 }
+var TX_HASH_PATTERN = /^[0-9a-f]{64}$/i;
+function isTransactionHash(value) {
+  return typeof value === "string" && TX_HASH_PATTERN.test(value);
+}
+function safeEndpoint(rpcUrl) {
+  try {
+    const url = new URL(rpcUrl);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[invalid endpoint]";
+  }
+}
+function scrubEndpoint(message, rpcUrl) {
+  return message.split(rpcUrl).join(safeEndpoint(rpcUrl)).replace(/([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, "$1").replace(/([?&][^=&\s]+)=([^&\s]*)/g, "$1=REDACTED");
+}
+function hashLabel(hash2) {
+  return isTransactionHash(hash2) ? hash2 : "none";
+}
+async function submitAndConfirm(server, prepared, phase, rpcUrl) {
+  let submission;
+  try {
+    submission = await server.sendTransaction(prepared);
+  } catch (err) {
+    throw new Error(
+      `${phase} submission failed at ${safeEndpoint(rpcUrl)}: ${scrubEndpoint(String(err?.message ?? err), rpcUrl)}`
+    );
+  }
+  const status = submission?.status;
+  if (status === "ERROR") {
+    throw new Error(
+      `${phase} submission was rejected (status=ERROR, hash=${hashLabel(submission?.hash)})`
+    );
+  }
+  if (status === "TRY_AGAIN_LATER") {
+    throw new Error(
+      `${phase} submission was temporarily rejected (status=TRY_AGAIN_LATER, hash=${hashLabel(submission?.hash)})`
+    );
+  }
+  if (status !== "PENDING" && status !== "DUPLICATE") {
+    throw new Error(
+      `${phase} submission returned an invalid response: unrecognized status "${String(submission?.status)}"`
+    );
+  }
+  if (!isTransactionHash(submission.hash)) {
+    throw new Error(
+      `${phase} submission returned an invalid response (status=${status}): missing or invalid transaction hash`
+    );
+  }
+  const confirmed = await waitForTransaction(server, submission.hash);
+  if (confirmed.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
+    throw new Error(
+      `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`
+    );
+  }
+}
 async function isContractDeployed(server, contractId) {
   try {
     const contractScAddress = Address.fromString(contractId).toScAddress();
@@ -53373,11 +53432,12 @@ Build the contract before running measurements.`
         throw err;
       }
       preparedUpload.sign(deployer);
-      const uploadSend = await server.sendTransaction(preparedUpload);
-      const uploadRes = await waitForTransaction(server, uploadSend.hash);
-      if (uploadRes.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`WASM upload failed: ${JSON.stringify(uploadRes)}`);
-      }
+      await submitAndConfirm(
+        server,
+        preparedUpload,
+        "WASM upload",
+        effectiveRpcUrl
+      );
       console.log(`WASM installed. Deploying contract instance...`);
       account = await server.getAccount(deployer.publicKey());
       const createTx = new TransactionBuilder(account, {
@@ -53392,11 +53452,12 @@ Build the contract before running measurements.`
       ).setTimeout(30).build();
       const preparedCreate = await server.prepareTransaction(createTx);
       preparedCreate.sign(deployer);
-      const createSend = await server.sendTransaction(preparedCreate);
-      const createRes = await waitForTransaction(server, createSend.hash);
-      if (createRes.status !== rpc_exports.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Contract deploy failed: ${JSON.stringify(createRes)}`);
-      }
+      await submitAndConfirm(
+        server,
+        preparedCreate,
+        "contract creation",
+        effectiveRpcUrl
+      );
       console.log(`Deployed at ${contractId}`);
     } else {
       console.log(`Already deployed at ${contractId}`);
@@ -54224,164 +54285,182 @@ async function upsertPrComment(token, body) {
   }
 }
 async function run() {
-  const fixturesPathRel = core3.getInput("fixtures-path", { required: true });
-  const configPathRel = core3.getInput("config-path");
-  const rpcUrl = core3.getInput("rpc-url") || "http://localhost:8000/rpc";
-  configuredRpcUrl = rpcUrl;
-  const githubToken = core3.getInput("github-token");
-  const baseRefInput = core3.getInput("base-ref");
-  const rustToolchain = core3.getInput("rust-toolchain");
-  const reportPathInput = core3.getInput("report-path");
-  const metadataPathInput = core3.getInput("metadata-path");
-  const buildCommand = core3.getInput("build-command");
-  const skipBuild = core3.getInput("skip-build") === "true";
-  const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
-  const baseRef = baseRefInput || context2.payload.pull_request?.base?.ref || "main";
-  const sharedKeyFile = path6.join(os2.tmpdir(), "weighin-deployer.key");
-  core3.info(`Base ref:   ${baseRef}`);
-  core3.info(`RPC URL:    ${sanitizeEndpoint(rpcUrl)}`);
-  core3.info(`Fixtures:   ${fixturesPathRel}`);
-  core3.info(`Key file:   ${sharedKeyFile}`);
-  await assertRpcHealthy(rpcUrl);
-  const headFixturesPath = path6.resolve(headWorkspace, fixturesPathRel);
-  const fixtureId = path6.relative(headWorkspace, headFixturesPath);
-  const configPath = path6.resolve(
-    headWorkspace,
-    configPathRel || "weighin.toml"
-  );
-  const config2 = loadConfig(configPath);
-  if (!fs6.existsSync(headFixturesPath)) {
-    throw new Error(`fixtures-path not found: ${headFixturesPath}`);
-  }
-  core3.startGroup("Building + measuring HEAD");
-  const headSha = await getHeadSha(headWorkspace);
-  core3.info(`HEAD SHA: ${headSha}`);
-  let headResults;
+  let keyDir = null;
+  let sharedKeyFile = null;
   try {
-    await buildForRevision(
-      headFixturesPath,
+    const fixturesPathRel = core3.getInput("fixtures-path", { required: true });
+    const configPathRel = core3.getInput("config-path");
+    const rpcUrl = core3.getInput("rpc-url") || "http://localhost:8000/rpc";
+    configuredRpcUrl = rpcUrl;
+    const githubToken = core3.getInput("github-token");
+    const baseRefInput = core3.getInput("base-ref");
+    const rustToolchain = core3.getInput("rust-toolchain");
+    const reportPathInput = core3.getInput("report-path");
+    const metadataPathInput = core3.getInput("metadata-path");
+    const buildCommand = core3.getInput("build-command");
+    const skipBuild = core3.getInput("skip-build") === "true";
+    const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
+    const baseRef = baseRefInput || context2.payload.pull_request?.base?.ref || "main";
+    keyDir = fs6.mkdtempSync(path6.join(os2.tmpdir(), "weighin-key-"));
+    fs6.chmodSync(keyDir, 448);
+    sharedKeyFile = path6.join(keyDir, "weighin-deployer.key");
+    core3.info(`Base ref:   ${baseRef}`);
+    core3.info(`RPC URL:    ${sanitizeEndpoint(rpcUrl)}`);
+    core3.info(`Fixtures:   ${fixturesPathRel}`);
+    core3.info(`Key file:   ${sharedKeyFile}`);
+    await assertRpcHealthy(rpcUrl);
+    const headFixturesPath = path6.resolve(headWorkspace, fixturesPathRel);
+    const fixtureId = path6.relative(headWorkspace, headFixturesPath);
+    const configPath = path6.resolve(
       headWorkspace,
-      rustToolchain,
-      buildCommand,
-      skipBuild
+      configPathRel || "weighin.toml"
     );
-    headResults = await runMeasurement({
-      fixturesPath: headFixturesPath,
-      fixtureId,
-      gitCommit: headSha,
-      sdkVersion: getSdkVersion(headWorkspace),
-      rpcUrl,
-      keyFile: sharedKeyFile
-    });
-  } catch (err) {
-    throw new Error(`HEAD measurement failed: ${err.message}`);
-  } finally {
-    core3.endGroup();
-  }
-  for (const contract of headResults) {
-    for (const bench of contract.benchmarks) {
-      core3.info(
-        `[HEAD] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`
-      );
+    const config2 = loadConfig(configPath);
+    if (!fs6.existsSync(headFixturesPath)) {
+      throw new Error(`fixtures-path not found: ${headFixturesPath}`);
     }
-  }
-  core3.startGroup(`Building + measuring base (${baseRef})`);
-  let baseResults = null;
-  let baseDir = null;
-  let baseSha = "unknown";
-  try {
-    const checkout = await checkoutRef(headWorkspace, baseRef, "base");
-    baseDir = checkout.dir;
-    baseSha = checkout.sha;
-    const baseFixturesPath = path6.resolve(baseDir, fixturesPathRel);
-    if (!fs6.existsSync(baseFixturesPath)) {
-      throw new Error("fixtures-path not found in base ref");
-    } else {
+    core3.startGroup("Building + measuring HEAD");
+    const headSha = await getHeadSha(headWorkspace);
+    core3.info(`HEAD SHA: ${headSha}`);
+    let headResults;
+    try {
       await buildForRevision(
-        baseFixturesPath,
-        baseDir,
+        headFixturesPath,
+        headWorkspace,
         rustToolchain,
         buildCommand,
         skipBuild
       );
-      baseResults = await runMeasurement({
-        fixturesPath: baseFixturesPath,
+      headResults = await runMeasurement({
+        fixturesPath: headFixturesPath,
         fixtureId,
-        gitCommit: baseSha,
-        sdkVersion: getSdkVersion(baseDir),
+        gitCommit: headSha,
+        sdkVersion: getSdkVersion(headWorkspace),
         rpcUrl,
         keyFile: sharedKeyFile
       });
-      for (const contract of baseResults) {
-        for (const bench of contract.benchmarks) {
-          core3.info(
-            `[BASE] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`
-          );
-        }
+    } catch (err) {
+      throw new Error(`HEAD measurement failed: ${err.message}`);
+    } finally {
+      core3.endGroup();
+    }
+    for (const contract of headResults) {
+      for (const bench of contract.benchmarks) {
+        core3.info(
+          `[HEAD] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`
+        );
       }
     }
-  } catch (err) {
-    throw new Error(
-      `Required BASE comparison failed: ${err.message}. Policies were not evaluated.`
-    );
-  } finally {
-    if (baseDir) await removeWorktree(headWorkspace, baseDir);
-    core3.endGroup();
-  }
-  if (!baseResults)
-    throw new Error(
-      "Required BASE comparison unavailable. Policies were not evaluated."
-    );
-  core3.startGroup("Computing diff");
-  const diff = diffBenchmarks(baseResults, headResults);
-  if (!diff.contracts.some((contract) => contract.functions.length > 0)) {
-    throw new Error(
-      "No matched BASE/HEAD benchmarks; comparison and policies were not evaluated."
-    );
-  }
-  core3.info(`Any regression: ${diff.hasRegression}`);
-  core3.endGroup();
-  core3.startGroup("Enforcing thresholds");
-  if (config2) {
-    core3.info("weighin.toml loaded");
-  } else {
-    core3.info("No weighin.toml found \u2014 no thresholds enforced");
-  }
-  const violations = enforceThresholds(diff, config2);
-  core3.info(`Violations: ${violations.length}`);
-  for (const v of violations) {
-    core3.error(
-      `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`
-    );
-  }
-  core3.endGroup();
-  const result = violations.length > 0 ? "fail" : "pass";
-  core3.setOutput("result", result);
-  core3.setOutput("diff-json", JSON.stringify(diff));
-  const body = renderComment(diff, violations, baseRef, headSha);
-  if (process.env.GITHUB_STEP_SUMMARY) await core3.summary.addRaw(body).write();
-  if (reportPathInput) writeReportFile(reportPathInput, headWorkspace, body);
-  if (metadataPathInput) {
-    const prNumber = context2.payload.pull_request?.number;
-    if (prNumber) {
-      const destination = path6.resolve(headWorkspace, metadataPathInput);
-      fs6.mkdirSync(path6.dirname(destination), { recursive: true });
-      const { owner, repo } = context2.repo;
-      const metadata = buildPrMetadata(`${owner}/${repo}`, prNumber, headSha);
-      fs6.writeFileSync(destination, JSON.stringify(metadata, null, 2), "utf8");
-    }
-  }
-  if (githubToken) {
-    core3.startGroup("Posting PR comment");
+    core3.startGroup(`Building + measuring base (${baseRef})`);
+    let baseResults = null;
+    let baseDir = null;
+    let baseSha = "unknown";
     try {
-      await upsertPrComment(githubToken, body);
+      const checkout = await checkoutRef(headWorkspace, baseRef, "base");
+      baseDir = checkout.dir;
+      baseSha = checkout.sha;
+      const baseFixturesPath = path6.resolve(baseDir, fixturesPathRel);
+      if (!fs6.existsSync(baseFixturesPath)) {
+        throw new Error("fixtures-path not found in base ref");
+      } else {
+        await buildForRevision(
+          baseFixturesPath,
+          baseDir,
+          rustToolchain,
+          buildCommand,
+          skipBuild
+        );
+        baseResults = await runMeasurement({
+          fixturesPath: baseFixturesPath,
+          fixtureId,
+          gitCommit: baseSha,
+          sdkVersion: getSdkVersion(baseDir),
+          rpcUrl,
+          keyFile: sharedKeyFile
+        });
+        for (const contract of baseResults) {
+          for (const bench of contract.benchmarks) {
+            core3.info(
+              `[BASE] WASM SHA256 (${bench.function_name}): ${bench.wasm_sha256}`
+            );
+          }
+        }
+      }
     } catch (err) {
-      core3.warning(`Failed to post PR comment: ${err.message}`);
+      throw new Error(
+        `Required BASE comparison failed: ${err.message}. Policies were not evaluated.`
+      );
+    } finally {
+      if (baseDir) await removeWorktree(headWorkspace, baseDir);
+      core3.endGroup();
+    }
+    if (!baseResults)
+      throw new Error(
+        "Required BASE comparison unavailable. Policies were not evaluated."
+      );
+    core3.startGroup("Computing diff");
+    const diff = diffBenchmarks(baseResults, headResults);
+    if (!diff.contracts.some((contract) => contract.functions.length > 0)) {
+      throw new Error(
+        "No matched BASE/HEAD benchmarks; comparison and policies were not evaluated."
+      );
+    }
+    core3.info(`Any regression: ${diff.hasRegression}`);
+    core3.endGroup();
+    core3.startGroup("Enforcing thresholds");
+    if (config2) {
+      core3.info("weighin.toml loaded");
+    } else {
+      core3.info("No weighin.toml found \u2014 no thresholds enforced");
+    }
+    const violations = enforceThresholds(diff, config2);
+    core3.info(`Violations: ${violations.length}`);
+    for (const v of violations) {
+      core3.error(
+        `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`
+      );
     }
     core3.endGroup();
-  }
-  if (violations.length > 0) {
-    core3.setFailed(`${violations.length} threshold violation(s) detected`);
+    const result = violations.length > 0 ? "fail" : "pass";
+    core3.setOutput("result", result);
+    core3.setOutput("diff-json", JSON.stringify(diff));
+    const body = renderComment(diff, violations, baseRef, headSha);
+    if (process.env.GITHUB_STEP_SUMMARY)
+      await core3.summary.addRaw(body).write();
+    if (reportPathInput) writeReportFile(reportPathInput, headWorkspace, body);
+    if (metadataPathInput) {
+      const prNumber = context2.payload.pull_request?.number;
+      if (prNumber) {
+        const destination = path6.resolve(headWorkspace, metadataPathInput);
+        fs6.mkdirSync(path6.dirname(destination), { recursive: true });
+        const { owner, repo } = context2.repo;
+        const metadata = buildPrMetadata(`${owner}/${repo}`, prNumber, headSha);
+        fs6.writeFileSync(destination, JSON.stringify(metadata, null, 2), "utf8");
+      }
+    }
+    if (githubToken) {
+      core3.startGroup("Posting PR comment");
+      try {
+        await upsertPrComment(githubToken, body);
+      } catch (err) {
+        core3.warning(`Failed to post PR comment: ${err.message}`);
+      }
+      core3.endGroup();
+    }
+    if (violations.length > 0) {
+      core3.setFailed(`${violations.length} threshold violation(s) detected`);
+    }
+  } finally {
+    if (keyDir) {
+      try {
+        fs6.rmSync(keyDir, { recursive: true, force: true });
+        core3.info(`Removed owned deployer key directory: ${keyDir}`);
+      } catch (err) {
+        core3.warning(
+          `Could not remove deployer key directory ${keyDir}: ${err.message}`
+        );
+      }
+    }
   }
 }
 run().catch(async (error2) => {

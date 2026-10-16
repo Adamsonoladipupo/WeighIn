@@ -19,6 +19,7 @@ import {
   StrKey,
   Address,
   TransactionBuilder,
+  Transaction,
   Operation,
   Keypair,
   rpc,
@@ -330,6 +331,87 @@ async function waitForTransaction(
   throw new Error(`Transaction ${txHash} not found after 30 seconds`);
 }
 
+// A transaction hash is 32 hex-encoded bytes.
+const TX_HASH_PATTERN = /^[0-9a-f]{64}$/i;
+
+function isTransactionHash(value: unknown): value is string {
+  return typeof value === "string" && TX_HASH_PATTERN.test(value);
+}
+
+// Render an endpoint for diagnostics without exposing userinfo or query values.
+function safeEndpoint(rpcUrl: string): string {
+  try {
+    const url = new URL(rpcUrl);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "[invalid endpoint]";
+  }
+}
+
+// Strip endpoint credentials from a captured transport message before reporting.
+function scrubEndpoint(message: string, rpcUrl: string): string {
+  return message
+    .split(rpcUrl)
+    .join(safeEndpoint(rpcUrl))
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^@\s/]+@/gi, "$1")
+    .replace(/([?&][^=&\s]+)=([^&\s]*)/g, "$1=REDACTED");
+}
+
+function hashLabel(hash: unknown): string {
+  return isTransactionHash(hash) ? hash : "none";
+}
+
+// Submit a prepared transaction and require a confirmed SUCCESS. Definite
+// rejections (ERROR) and temporary rejections (TRY_AGAIN_LATER) fail before any
+// confirmation polling; PENDING/DUPLICATE with a valid hash use the existing
+// confirmation path; any other response fails closed.
+async function submitAndConfirm(
+  server: rpc.Server,
+  prepared: Transaction,
+  phase: string,
+  rpcUrl: string,
+): Promise<void> {
+  let submission: rpc.Api.SendTransactionResponse;
+  try {
+    submission = await server.sendTransaction(prepared);
+  } catch (err: any) {
+    throw new Error(
+      `${phase} submission failed at ${safeEndpoint(rpcUrl)}: ${scrubEndpoint(String(err?.message ?? err), rpcUrl)}`,
+    );
+  }
+  const status = submission?.status as string;
+  if (status === "ERROR") {
+    throw new Error(
+      `${phase} submission was rejected (status=ERROR, hash=${hashLabel(submission?.hash)})`,
+    );
+  }
+  if (status === "TRY_AGAIN_LATER") {
+    throw new Error(
+      `${phase} submission was temporarily rejected (status=TRY_AGAIN_LATER, hash=${hashLabel(submission?.hash)})`,
+    );
+  }
+  if (status !== "PENDING" && status !== "DUPLICATE") {
+    throw new Error(
+      `${phase} submission returned an invalid response: unrecognized status "${String(submission?.status)}"`,
+    );
+  }
+  if (!isTransactionHash(submission.hash)) {
+    throw new Error(
+      `${phase} submission returned an invalid response (status=${status}): missing or invalid transaction hash`,
+    );
+  }
+  const confirmed = await waitForTransaction(server, submission.hash);
+  if (confirmed.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+    throw new Error(
+      `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`,
+    );
+  }
+}
+
 // Check if contract is already deployed
 async function isContractDeployed(
   server: rpc.Server,
@@ -469,11 +551,12 @@ export async function runMeasurement(
         throw err;
       }
       preparedUpload.sign(deployer);
-      const uploadSend = await server.sendTransaction(preparedUpload);
-      const uploadRes = await waitForTransaction(server, uploadSend.hash);
-      if (uploadRes.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`WASM upload failed: ${JSON.stringify(uploadRes)}`);
-      }
+      await submitAndConfirm(
+        server,
+        preparedUpload,
+        "WASM upload",
+        effectiveRpcUrl,
+      );
 
       console.log(`WASM installed. Deploying contract instance...`);
       account = await server.getAccount(deployer.publicKey());
@@ -495,11 +578,12 @@ export async function runMeasurement(
 
       const preparedCreate = await server.prepareTransaction(createTx);
       preparedCreate.sign(deployer);
-      const createSend = await server.sendTransaction(preparedCreate);
-      const createRes = await waitForTransaction(server, createSend.hash);
-      if (createRes.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Contract deploy failed: ${JSON.stringify(createRes)}`);
-      }
+      await submitAndConfirm(
+        server,
+        preparedCreate,
+        "contract creation",
+        effectiveRpcUrl,
+      );
       console.log(`Deployed at ${contractId}`);
     } else {
       console.log(`Already deployed at ${contractId}`);
