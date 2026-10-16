@@ -54435,7 +54435,11 @@ async function run() {
         fs6.mkdirSync(path6.dirname(destination), { recursive: true });
         const { owner, repo } = context2.repo;
         const metadata = buildPrMetadata(`${owner}/${repo}`, prNumber, headSha);
-        fs6.writeFileSync(destination, JSON.stringify(metadata, null, 2), "utf8");
+        fs6.writeFileSync(
+          destination,
+          JSON.stringify(metadata, null, 2),
+          "utf8"
+        );
       }
     }
     if (githubToken) {
