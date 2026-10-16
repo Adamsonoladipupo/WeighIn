@@ -21703,9 +21703,9 @@ var require_core = __commonJS({
     exports2.exportVariable = exportVariable;
     exports2.setSecret = setSecret;
     exports2.addPath = addPath;
-    exports2.getInput = getInput2;
+    exports2.getInput = getInput3;
     exports2.getMultilineInput = getMultilineInput;
-    exports2.getBooleanInput = getBooleanInput;
+    exports2.getBooleanInput = getBooleanInput2;
     exports2.setOutput = setOutput2;
     exports2.setCommandEcho = setCommandEcho;
     exports2.setFailed = setFailed2;
@@ -21753,7 +21753,7 @@ var require_core = __commonJS({
       }
       process.env["PATH"] = `${inputPath}${path7.delimiter}${process.env["PATH"]}`;
     }
-    function getInput2(name, options) {
+    function getInput3(name, options) {
       const val = process.env[`INPUT_${name.replace(/ /g, "_").toUpperCase()}`] || "";
       if (options && options.required && !val) {
         throw new Error(`Input required and not supplied: ${name}`);
@@ -21764,16 +21764,16 @@ var require_core = __commonJS({
       return val.trim();
     }
     function getMultilineInput(name, options) {
-      const inputs = getInput2(name, options).split("\n").filter((x) => x !== "");
+      const inputs = getInput3(name, options).split("\n").filter((x) => x !== "");
       if (options && options.trimWhitespace === false) {
         return inputs;
       }
       return inputs.map((input) => input.trim());
     }
-    function getBooleanInput(name, options) {
+    function getBooleanInput2(name, options) {
       const trueValue = ["true", "True", "TRUE"];
       const falseValue = ["false", "False", "FALSE"];
-      const val = getInput2(name, options);
+      const val = getInput3(name, options);
       if (trueValue.includes(val))
         return true;
       if (falseValue.includes(val))
@@ -54122,6 +54122,13 @@ async function buildContracts(fixturesPath, rustToolchain) {
 }
 
 // src/build-selection.ts
+function parseOptionalBooleanInput(name, defaultValue = false) {
+  const raw = core.getInput(name);
+  if (!raw) {
+    return defaultValue;
+  }
+  return core.getBooleanInput(name);
+}
 async function buildForRevision(fixturesPath, worktreeRoot, rustToolchain, buildCommand, skipBuild) {
   if (buildCommand && skipBuild)
     throw new Error("build-command and skip-build cannot be used together");
@@ -54347,7 +54354,10 @@ async function run() {
     const reportPathInput = core3.getInput("report-path");
     const metadataPathInput = core3.getInput("metadata-path");
     const buildCommand = core3.getInput("build-command");
-    const skipBuild = core3.getInput("skip-build") === "true";
+    const skipBuild = parseOptionalBooleanInput("skip-build", false);
+    if (buildCommand && skipBuild) {
+      throw new Error("build-command and skip-build cannot be used together");
+    }
     const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
     const baseRef = baseRefInput || context2.payload.pull_request?.base?.ref || "main";
     keyDir = fs6.mkdtempSync(path6.join(os2.tmpdir(), "weighin-key-"));
