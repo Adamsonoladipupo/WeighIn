@@ -73,7 +73,7 @@ inputs:
     default: ""
 
   skip-build:
-    description: "Skip compilation and use precompiled fixture WASMs in both revisions; bypasses default build checks"
+    description: "Skip compilation and use precompiled fixture WASMs in both revisions; bypasses default build checks. Accepts standard YAML 1.2 boolean spellings (true, True, TRUE, false, False, FALSE); defaults to false when omitted. Non-boolean values are rejected."
     required: false
     default: "false"
 

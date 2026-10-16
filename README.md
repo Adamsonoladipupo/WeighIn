@@ -160,7 +160,7 @@ All supported inputs are declared in [action.yml](action.yml):
 | `base-ref` | Fetched baseline ref; PR base branch, otherwise `main`, if omitted |
 | `rust-toolchain` | Contract-build Rustup override; does not change pinned native-helper toolchain |
 | `build-command` | Custom shell build command in each revision; replaces default build guarantees |
-| `skip-build` | `true` uses prebuilt fixture WASMs in both revisions; incompatible with `build-command` |
+| `skip-build` | `true` uses prebuilt fixture WASMs in both revisions; incompatible with `build-command`. Accepts YAML 1.2 boolean spellings (`true`, `True`, `TRUE`, `false`, `False`, `FALSE`); defaults to `false`. Non-boolean values are rejected |
 | `report-path` | Optional Markdown report destination |
 | `metadata-path` | Optional versioned PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
 | `github-token` | Optional direct PR-comment token; omit for the separate comment workflow |

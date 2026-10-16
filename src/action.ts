@@ -9,7 +9,7 @@ import { runMeasurement, ContractBenchmark } from "./measurement";
 import { diffBenchmarks, DiffResult, contractLabel } from "./diff";
 import { loadConfig, enforceThresholds, Violation } from "./threshold";
 import { renderComment } from "./comment";
-import { buildForRevision } from "./build-selection";
+import { buildForRevision, parseOptionalBooleanInput } from "./build-selection";
 import { writeReportFile, generateFailureReport } from "./report";
 import { buildPrMetadata } from "./pr-metadata";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
@@ -235,7 +235,11 @@ async function run(): Promise<void> {
     const reportPathInput = core.getInput("report-path");
     const metadataPathInput = core.getInput("metadata-path");
     const buildCommand = core.getInput("build-command");
-    const skipBuild = core.getInput("skip-build") === "true";
+    const skipBuild = parseOptionalBooleanInput("skip-build", false);
+
+    if (buildCommand && skipBuild) {
+      throw new Error("build-command and skip-build cannot be used together");
+    }
 
     // The runner's checkout of the PR head is at GITHUB_WORKSPACE
     const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
