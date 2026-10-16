@@ -113,9 +113,72 @@ function execute(
 }
 
 let provisioned: Promise<string> | undefined;
+
+/** Reset helper provisioning state (used for testing failure and recovery). */
+export function _resetSimulationHelperState(): void {
+  provisioned = undefined;
+}
+
+export interface HelperCompatibilityInputs {
+  os?: string;
+  arch?: string;
+  toolchain?: string;
+  target?: string;
+  manifestPath?: string;
+  lockPath?: string;
+  sourcePath?: string;
+  features?: string[];
+  flags?: string[];
+}
+
+/**
+ * Define complete compatibility keys including helper source, manifest, lock,
+ * pinned compiler, target, enabled features, and build flags.
+ */
+export function computeHelperCacheKey(
+  inputs?: Partial<HelperCompatibilityInputs>,
+): string {
+  const directory = path.resolve(__dirname, "../native/simulation");
+  const os = inputs?.os ?? process.platform;
+  const arch = inputs?.arch ?? process.arch;
+  const toolchain = inputs?.toolchain ?? "1.95.0";
+  const target = inputs?.target ?? "x86_64-unknown-linux-gnu";
+  const manifestPath =
+    inputs?.manifestPath ?? path.join(directory, "Cargo.toml");
+  const lockPath = inputs?.lockPath ?? path.join(directory, "Cargo.lock");
+  const sourcePath = inputs?.sourcePath ?? path.join(directory, "src/main.rs");
+
+  const manifestContent = fs.existsSync(manifestPath)
+    ? fs.readFileSync(manifestPath)
+    : Buffer.from("");
+  const lockContent = fs.existsSync(lockPath)
+    ? fs.readFileSync(lockPath)
+    : Buffer.from("");
+  const sourceContent = fs.existsSync(sourcePath)
+    ? fs.readFileSync(sourcePath)
+    : Buffer.from("");
+
+  const features = [...(inputs?.features ?? [])].sort().join(",");
+  const flags = [...(inputs?.flags ?? ["--release", "--locked"])]
+    .sort()
+    .join(" ");
+
+  const hash = crypto
+    .createHash("sha256")
+    .update(manifestContent)
+    .update(lockContent)
+    .update(sourceContent)
+    .update(features)
+    .update(flags)
+    .digest("hex");
+
+  return `${os}-${arch}-cargo-simulation-helper-${toolchain}-${target}-${hash}`;
+}
+
 /** Linux x64 is the initial supported runtime. Cargo is never installed implicitly. */
 export async function resolveSimulationHelper(
   explicitPath?: string,
+  customBuild?: () => Promise<string>,
 ): Promise<string> {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error("Native simulation currently supports Linux x64 only");
@@ -130,8 +193,11 @@ export async function resolveSimulationHelper(
     }
     return file;
   }
-  if (!provisioned)
-    provisioned = (async () => {
+  if (!provisioned) {
+    const buildPromise = (async () => {
+      if (customBuild) {
+        return customBuild();
+      }
       const directory = path.resolve(__dirname, "../native/simulation");
       const manifest = path.join(directory, "Cargo.toml");
       if (!fs.existsSync(manifest))
@@ -162,6 +228,17 @@ export async function resolveSimulationHelper(
         "target/x86_64-unknown-linux-gnu/release/weighin-simulation",
       );
     })();
+
+    // Clear failed provisioning so subsequent calls can retry; do not let older
+    // rejections clear newer in-flight attempts.
+    const attempt = buildPromise.catch((err) => {
+      if (provisioned === attempt) {
+        provisioned = undefined;
+      }
+      throw err;
+    });
+    provisioned = attempt;
+  }
   return provisioned;
 }
 

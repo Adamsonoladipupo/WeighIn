@@ -98,4 +98,135 @@ describe("renderComment", () => {
     expect(comment).toContain("new-fn");
     expect(comment).toContain("old-fn");
   });
+
+  it("renders byte-identical output for equivalent reordered contracts and functions without mutating inputs", () => {
+    const fn1 = {
+      function_name: "alpha_fn",
+      case_id: "id:case-1",
+      hasRegression: false,
+      metrics: [
+        {
+          key: "cpu_instructions" as const,
+          base: { consumed: 100, limit: 1000 },
+          head: { consumed: 100, limit: 1000 },
+          delta: 0,
+          pct: 0,
+          regression: false,
+        },
+      ],
+    };
+    const fn2 = {
+      function_name: "beta_fn",
+      case_id: "id:case-2",
+      hasRegression: false,
+      metrics: [
+        {
+          key: "cpu_instructions" as const,
+          base: { consumed: 200, limit: 1000 },
+          head: { consumed: 200, limit: 1000 },
+          delta: 0,
+          pct: 0,
+          regression: false,
+        },
+      ],
+    };
+
+    const contractA = {
+      fixture_id: "path:fixtures-a.json",
+      logical_id: "id:contract-a",
+      contract_id: "CAAA",
+      base_contract_id: "base-CAAA",
+      head_contract_id: "CAAA",
+      base_commit: "abc",
+      head_commit: "def",
+      hasRegression: false,
+      newFunctions: [],
+      removedFunctions: [],
+      newBenchmarks: [
+        { function_name: "new_b", case_id: "id:1" },
+        { function_name: "new_a", case_id: "id:1" },
+      ],
+      removedBenchmarks: [
+        { function_name: "rem_b", case_id: "id:1" },
+        { function_name: "rem_a", case_id: "id:1" },
+      ],
+      functions: [fn2, fn1],
+    };
+
+    const contractB = {
+      fixture_id: "path:fixtures-b.json",
+      logical_id: "id:contract-b",
+      contract_id: "CBBB",
+      base_contract_id: "base-CBBB",
+      head_contract_id: "CBBB",
+      base_commit: "abc",
+      head_commit: "def",
+      hasRegression: false,
+      newFunctions: [],
+      removedFunctions: [],
+      newBenchmarks: [],
+      removedBenchmarks: [],
+      functions: [fn1],
+    };
+
+    const diff1: DiffResult = {
+      contracts: [contractB, contractA],
+      hasRegression: false,
+      newContracts: ["zeta_contract", "alpha_contract"],
+      removedContracts: ["theta_contract", "beta_contract"],
+    };
+
+    const diff2: DiffResult = {
+      contracts: [
+        {
+          ...contractA,
+          newBenchmarks: [
+            { function_name: "new_a", case_id: "id:1" },
+            { function_name: "new_b", case_id: "id:1" },
+          ],
+          removedBenchmarks: [
+            { function_name: "rem_a", case_id: "id:1" },
+            { function_name: "rem_b", case_id: "id:1" },
+          ],
+          functions: [fn1, fn2],
+        },
+        contractB,
+      ],
+      hasRegression: false,
+      newContracts: ["alpha_contract", "zeta_contract"],
+      removedContracts: ["beta_contract", "theta_contract"],
+    };
+
+    const violations1: Violation[] = [
+      {
+        contract_id: "CAAA",
+        function_name: "beta_fn",
+        metric: "memory_bytes",
+        delta: 5,
+        pct: 5,
+        rule: "strict_zero_tolerance",
+        message: "viol 2",
+      },
+      {
+        contract_id: "CAAA",
+        function_name: "alpha_fn",
+        metric: "cpu_instructions",
+        delta: 10,
+        pct: 10,
+        rule: "strict_zero_tolerance",
+        message: "viol 1",
+      },
+    ];
+
+    const violations2: Violation[] = [violations1[1], violations1[0]];
+
+    const comment1 = renderComment(diff1, violations1, "main", "abcdef123");
+    const comment2 = renderComment(diff2, violations2, "main", "abcdef123");
+
+    expect(comment1).toBe(comment2);
+
+    // Verify inputs were not mutated
+    expect(diff1.contracts[0].contract_id).toBe("CBBB");
+    expect(violations1[0].function_name).toBe("beta_fn");
+  });
 });

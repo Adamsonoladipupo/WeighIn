@@ -179,6 +179,50 @@ function renderFunctionTable(fn: FunctionDiff): string {
   ].join("\n");
 }
 
+function compareCodePoints(a?: string, b?: string): number {
+  const sa = a ?? "";
+  const sb = b ?? "";
+  if (sa < sb) return -1;
+  if (sa > sb) return 1;
+  return 0;
+}
+
+function compareContracts(a: any, b: any): number {
+  return (
+    compareCodePoints(a.fixture_id, b.fixture_id) ||
+    compareCodePoints(a.logical_id, b.logical_id) ||
+    compareCodePoints(a.contract_id, b.contract_id)
+  );
+}
+
+function compareBenchmarkIdentities(
+  a: BenchmarkIdentity,
+  b: BenchmarkIdentity,
+): number {
+  return (
+    compareCodePoints(a.function_name, b.function_name) ||
+    compareCodePoints(a.case_id, b.case_id)
+  );
+}
+
+function compareFunctions(a: FunctionDiff, b: FunctionDiff): number {
+  return (
+    compareCodePoints(a.function_name, b.function_name) ||
+    compareCodePoints(a.case_id, b.case_id)
+  );
+}
+
+function compareViolations(a: Violation, b: Violation): number {
+  return (
+    compareCodePoints(a.fixture_id, b.fixture_id) ||
+    compareCodePoints(a.logical_id, b.logical_id) ||
+    compareCodePoints(a.contract_id, b.contract_id) ||
+    compareCodePoints(a.function_name, b.function_name) ||
+    compareCodePoints(a.case_id, b.case_id) ||
+    compareCodePoints(a.metric, b.metric)
+  );
+}
+
 /**
  * Build a complete markdown body for a PR comment.
  */
@@ -190,11 +234,14 @@ export function renderComment(
 ): string {
   const lines: string[] = [];
 
+  // Sort violations without mutating input
+  const sortedViolations = [...violations].sort(compareViolations);
+
   // Header
-  const statusEmoji = violations.length > 0 ? "🔴" : "🟢";
+  const statusEmoji = sortedViolations.length > 0 ? "🔴" : "🟢";
   const statusText =
-    violations.length > 0
-      ? `**${violations.length} threshold violation${violations.length > 1 ? "s" : ""}**`
+    sortedViolations.length > 0
+      ? `**${sortedViolations.length} threshold violation${sortedViolations.length > 1 ? "s" : ""}**`
       : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
@@ -204,10 +251,10 @@ export function renderComment(
   lines.push("");
 
   // Violations block
-  if (violations.length > 0) {
+  if (sortedViolations.length > 0) {
     lines.push("### ❌ Violations");
     lines.push("");
-    for (const v of violations) {
+    for (const v of sortedViolations) {
       const measured = diff.contracts
         .find((c) => contractLabel(c) === contractLabel(v))
         ?.functions.find(
@@ -222,22 +269,28 @@ export function renderComment(
     lines.push("");
   }
 
-  // New / removed contracts
-  if (diff.newContracts.length > 0) {
+  // New / removed contracts (sorted copies)
+  const sortedNewContracts = [...diff.newContracts].sort(compareCodePoints);
+  const sortedRemovedContracts = [...diff.removedContracts].sort(
+    compareCodePoints,
+  );
+
+  if (sortedNewContracts.length > 0) {
     lines.push(
-      `> **New contracts** (no baseline): ${diff.newContracts.map((c) => `\`${c}\``).join(", ")}`,
+      `> **New contracts** (no baseline): ${sortedNewContracts.map((c) => `\`${c}\``).join(", ")}`,
     );
     lines.push("");
   }
-  if (diff.removedContracts.length > 0) {
+  if (sortedRemovedContracts.length > 0) {
     lines.push(
-      `> **Removed contracts**: ${diff.removedContracts.map((c) => `\`${c}\``).join(", ")}`,
+      `> **Removed contracts**: ${sortedRemovedContracts.map((c) => `\`${c}\``).join(", ")}`,
     );
     lines.push("");
   }
 
-  // Per-contract sections
-  for (const contract of diff.contracts) {
+  // Per-contract sections (sorted copy)
+  const sortedContracts = [...diff.contracts].sort(compareContracts);
+  for (const contract of sortedContracts) {
     lines.push(`### Contract \`${contractLabel(contract)}\``);
     lines.push("");
     lines.push(
@@ -245,20 +298,28 @@ export function renderComment(
     );
     lines.push("");
 
-    if (contract.newBenchmarks.length > 0) {
+    const sortedNewBenchmarks = [...contract.newBenchmarks].sort(
+      compareBenchmarkIdentities,
+    );
+    const sortedRemovedBenchmarks = [...contract.removedBenchmarks].sort(
+      compareBenchmarkIdentities,
+    );
+
+    if (sortedNewBenchmarks.length > 0) {
       lines.push(
-        `> New benchmarks (no baseline): ${contract.newBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`,
+        `> New benchmarks (no baseline): ${sortedNewBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`,
       );
       lines.push("");
     }
-    if (contract.removedBenchmarks.length > 0) {
+    if (sortedRemovedBenchmarks.length > 0) {
       lines.push(
-        `> Removed benchmarks: ${contract.removedBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`,
+        `> Removed benchmarks: ${sortedRemovedBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`,
       );
       lines.push("");
     }
 
-    for (const fn of contract.functions) {
+    const sortedFunctions = [...contract.functions].sort(compareFunctions);
+    for (const fn of sortedFunctions) {
       lines.push(renderFunctionTable(fn));
       lines.push("");
     }

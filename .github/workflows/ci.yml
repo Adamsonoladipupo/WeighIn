@@ -63,6 +63,18 @@ jobs:
           toolchain: "1.95.0"
           targets: wasm32v1-none
 
+      - name: Cache native simulation helper
+        uses: actions/cache@v4
+        with:
+          path: |
+            native/simulation/target
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-simulation-helper-1.95.0-x86_64-unknown-linux-gnu-${{ hashFiles('native/simulation/Cargo.lock', 'native/simulation/Cargo.toml', 'native/simulation/src/**') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-simulation-helper-1.95.0-x86_64-unknown-linux-gnu-
+
       - name: Install Node dependencies
         run: npm ci
 
