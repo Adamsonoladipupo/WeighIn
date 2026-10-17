@@ -52969,6 +52969,51 @@ var RpcServer = class {
 // src/endpoint.ts
 var REDACTED_VALUE = "REDACTED";
 var INVALID_ENDPOINT = "[invalid endpoint]";
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function parseJsonRpcResponse(rawBody, expectedId) {
+  let value;
+  try {
+    value = JSON.parse(rawBody);
+  } catch {
+    throw new Error("Malformed JSON-RPC response: invalid JSON");
+  }
+  if (!isRecord(value)) {
+    throw new Error("Malformed JSON-RPC response: expected an object");
+  }
+  if (value.jsonrpc !== "2.0") {
+    throw new Error("Malformed JSON-RPC response: unsupported jsonrpc version");
+  }
+  if (!Object.hasOwn(value, "id") || value.id !== expectedId) {
+    throw new Error(
+      "Malformed JSON-RPC response: response ID does not match request"
+    );
+  }
+  const hasResult = Object.hasOwn(value, "result");
+  const hasError = Object.hasOwn(value, "error");
+  if (hasResult === hasError) {
+    throw new Error(
+      "Malformed JSON-RPC response: expected exactly one of result or error"
+    );
+  }
+  const allowedKeys = /* @__PURE__ */ new Set([
+    "jsonrpc",
+    "id",
+    hasResult ? "result" : "error"
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
+    throw new Error("Malformed JSON-RPC response: unexpected envelope field");
+  }
+  if (hasResult) {
+    return value;
+  }
+  const error2 = value.error;
+  if (!isRecord(error2) || !Number.isInteger(error2.code) || typeof error2.message !== "string" || Object.keys(error2).some((key) => !["code", "message", "data"].includes(key))) {
+    throw new Error("Malformed JSON-RPC response: invalid error object");
+  }
+  return value;
+}
 function sanitizeEndpoint(rawUrl) {
   let url;
   try {
@@ -53043,6 +53088,7 @@ async function ensureAccountReady(rpcUrl, publicKey, signal) {
   ).toXDR("base64");
   const deadline = Date.now() + DEADLINE_MS;
   let funded = false, lastError = "account has not appeared in RPC";
+  let requestId = 0;
   async function request3(url, options = {}) {
     try {
       if (signal?.aborted)
@@ -53082,23 +53128,32 @@ async function ensureAccountReady(rpcUrl, publicKey, signal) {
     if (signal?.aborted)
       throw signal.reason || new Error("Account readiness cancelled");
     try {
+      const id = ++requestId;
       const response = await request3(rpcUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jsonrpc: "2.0",
-          id: 1,
+          id,
           method: "getLedgerEntries",
           params: { keys: [key] }
         })
       });
-      const json = JSON.parse(response);
-      if (json.error)
+      let json;
+      try {
+        json = parseJsonRpcResponse(response, id);
+      } catch (error2) {
         throw new Error(
-          `Account readiness RPC error at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(json.error), rpcUrl)}`
+          `Account readiness invalid RPC response at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(error2?.message ?? error2), rpcUrl)}`
         );
-      const entries = json.result?.entries;
-      if (!Number.isInteger(json.result?.latestLedger) || json.result.latestLedger <= 0 || !Array.isArray(entries) || entries.length > 1)
+      }
+      if ("error" in json)
+        throw new Error(
+          `Account readiness RPC method error at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(json.error), rpcUrl)}`
+        );
+      const result = json.result;
+      const entries = result?.entries;
+      if (!Number.isInteger(result?.latestLedger) || result.latestLedger <= 0 || !Array.isArray(entries) || entries.length > 1)
         throw new Error("Invalid account readiness RPC response");
       if (entries.length === 1) {
         const entry = entries[0];
@@ -53483,6 +53538,7 @@ var RpcError = class extends Error {
     this.rpcError = rpcError;
   }
 };
+var nextRpcRequestId = 0;
 function isTransientLedgerRead(failure) {
   if (!(failure instanceof RpcError) || failure.method !== "getLedgerEntries")
     return false;
@@ -53496,11 +53552,17 @@ async function callRpc(rpcUrl, method, params, signal) {
   let response;
   const timeoutSignal = AbortSignal.timeout(3e4);
   const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  const requestId = ++nextRpcRequestId;
   try {
     response = await fetch(rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: requestId,
+        method,
+        params
+      }),
       signal: combinedSignal
     });
   } catch (error2) {
@@ -53515,10 +53577,29 @@ async function callRpc(rpcUrl, method, params, signal) {
     throw new Error(
       `RPC ${method}: HTTP ${response.status} at ${sanitizeEndpoint(rpcUrl)}`
     );
-  const body = await response.json();
-  if (body.error || body.result === void 0)
-    throw new RpcError(method, body.error, rpcUrl);
-  return body.result;
+  let responseBody;
+  try {
+    responseBody = await response.text();
+  } catch (error2) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`RPC ${method} cancelled`);
+    }
+    throw new Error(
+      `RPC ${method} response transport failure at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(error2?.message ?? error2), rpcUrl)}`
+    );
+  }
+  let envelope;
+  try {
+    envelope = parseJsonRpcResponse(responseBody, requestId);
+  } catch (error2) {
+    throw new Error(
+      `RPC ${method} invalid response at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(error2?.message ?? error2), rpcUrl)}`
+    );
+  }
+  if ("error" in envelope) {
+    throw new RpcError(method, envelope.error, rpcUrl);
+  }
+  return envelope.result;
 }
 async function measureInvocation(rpcUrl, transaction, helperPath, options) {
   const signal = options?.signal;
@@ -54563,16 +54644,28 @@ function renderFunctionTable(fn) {
     const limit = m.head.limit === null && m.head.limit_reason ? "No independent limit" : fmt(m.head.limit);
     return `| ${t} | ${label} | ${base} | ${head} | ${delta} | ${pct} | ${limit} |`;
   });
+  const provenanceDetails = [];
+  if (fn.head_provenance) {
+    provenanceDetails.push(
+      `Snapshot ledgers: BASE ${fn.base_provenance?.ledger ?? "Unavailable"} \u2192 HEAD ${fn.head_provenance.ledger}.`,
+      `Compute config SHA256: BASE \`${fn.base_provenance?.compute_config_sha256 ?? "Unavailable"}\` \u2192 HEAD \`${fn.head_provenance.compute_config_sha256}\`.`,
+      `Full config SHA256: BASE \`${fn.base_provenance?.config_sha256 ?? "Unavailable"}\` \u2192 HEAD \`${fn.head_provenance.config_sha256}\`.`,
+      `Resource limits SHA256: BASE \`${fn.base_provenance?.resource_limits_sha256 ?? "Unavailable"}\` \u2192 HEAD \`${fn.head_provenance.resource_limits_sha256 ?? "Unavailable"}\`.`,
+      `Helper SHA256: BASE \`${fn.base_provenance?.helper_sha256 ?? "Unavailable"}\` \u2192 HEAD \`${fn.head_provenance.helper_sha256}\`.`
+    );
+  }
+  provenanceDetails.push(
+    ...fn.metrics.filter(
+      (m) => m.head.source || m.head.limit_source || m.head.limit_reason
+    ).map(
+      (m) => `- **${METRIC_LABELS[m.key]}** source: ${m.head.source ? `\`${m.head.source}\`` : "Unavailable"}; limit: ${m.head.limit_source ? `\`${m.head.limit_source}\`` : m.head.limit_reason ?? "Unavailable"}.`
+    )
+  );
   return [
     `#### \`${benchmarkLabel(fn)}\``,
     "",
     ...fn.head_provenance ? [
       `Compute source: ${fn.head_provenance.source} ${fn.head_provenance.source_version}; protocol ${fn.head_provenance.protocol}.`,
-      `Snapshot ledgers: BASE ${fn.base_provenance?.ledger} \u2192 HEAD ${fn.head_provenance.ledger}; compute config SHA256: \`${fn.head_provenance.compute_config_sha256}\`.`,
-      `Full config SHA256: BASE \`${fn.base_provenance?.config_sha256}\` \u2192 HEAD \`${fn.head_provenance.config_sha256}\`.`,
-      ...fn.head_provenance.resource_limits_sha256 ? [
-        `Resource limits SHA256: \`${fn.head_provenance.resource_limits_sha256}\`.`
-      ] : [],
       ""
     ] : [],
     "| | Metric | Base | Head | Delta | Change | Limit |",
@@ -54580,9 +54673,14 @@ function renderFunctionTable(fn) {
     ...rows,
     "",
     ...fn.metrics.filter((m) => m.availability === "unavailable").map((m) => `- **${metricLabel(m)} unavailable**: ${m.reason}`),
-    ...fn.metrics.filter((m) => m.head.limit_source || m.head.limit_reason).map(
-      (m) => `- **${METRIC_LABELS[m.key]}** source: \`${m.head.source}\`; limit: ${m.head.limit_source ? `\`${m.head.limit_source}\`` : m.head.limit_reason}.`
-    )
+    ...provenanceDetails.length > 0 ? [
+      "",
+      "<details><summary>Snapshot and metric provenance</summary>",
+      "",
+      ...provenanceDetails,
+      "",
+      "</details>"
+    ] : []
   ].join("\n");
 }
 function compareCodePoints(a, b) {
@@ -54993,11 +55091,13 @@ async function assertRpcHealthy(rpcUrl) {
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} ${res.statusText}`);
     }
-    const json = await res.json();
-    if (json.error) {
-      throw new Error(`RPC error: ${JSON.stringify(json.error)}`);
+    const health = parseJsonRpcResponse(await res.text(), 1);
+    if ("error" in health) {
+      throw new Error(
+        `RPC getHealth method error: ${JSON.stringify(health.error)}`
+      );
     }
-    if (json.result?.status !== "healthy")
+    if (health.result?.status !== "healthy")
       throw new Error("RPC has not reported healthy");
     const network = await fetch(rpcUrl, {
       method: "POST",
@@ -55007,11 +55107,17 @@ async function assertRpcHealthy(rpcUrl) {
     });
     if (!network.ok)
       throw new Error(`HTTP ${network.status} ${network.statusText}`);
-    const metadata = await network.json();
-    if (metadata.error || typeof metadata.result?.passphrase !== "string" || !metadata.result.passphrase.trim()) {
+    const metadata = parseJsonRpcResponse(await network.text(), 2);
+    if ("error" in metadata) {
+      throw new Error(
+        `RPC getNetwork method error: ${JSON.stringify(metadata.error)}`
+      );
+    }
+    const networkResult = metadata.result;
+    if (typeof networkResult?.passphrase !== "string" || !networkResult.passphrase.trim()) {
       throw new Error("Invalid RPC network metadata");
     }
-    core3.info(`RPC healthy \u2014 network: ${metadata.result.passphrase}`);
+    core3.info(`RPC healthy \u2014 network: ${networkResult.passphrase}`);
   } catch (err) {
     core3.setFailed(
       `Soroban RPC at ${sanitizeEndpoint(rpcUrl)} is not reachable: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}
@@ -55019,6 +55125,42 @@ Start the network before invoking this action (e.g. via stellar/quickstart or sc
     );
     throw err;
   }
+}
+function isPathWithin(root, candidate) {
+  const relative3 = path6.relative(root, candidate);
+  return relative3 === "" || relative3 !== ".." && !relative3.startsWith(`..${path6.sep}`) && !path6.isAbsolute(relative3);
+}
+function resolveRevisionFixturesPath(worktreeRoot, fixturesPathInput, revision) {
+  const invalidPathMessage = `fixtures-path for ${revision} must be a relative path inside the ${revision} worktree`;
+  if (!fixturesPathInput.trim() || path6.isAbsolute(fixturesPathInput) || path6.win32.isAbsolute(fixturesPathInput) || /^[A-Za-z]:/.test(fixturesPathInput)) {
+    throw new Error(invalidPathMessage);
+  }
+  const root = path6.resolve(worktreeRoot);
+  const resolved = path6.resolve(root, fixturesPathInput);
+  if (!isPathWithin(root, resolved)) throw new Error(invalidPathMessage);
+  try {
+    const realRoot = fs5.realpathSync(root);
+    let current = root;
+    for (const segment of path6.relative(root, resolved).split(path6.sep)) {
+      if (!segment) continue;
+      current = path6.join(current, segment);
+      let currentStats;
+      try {
+        currentStats = fs5.lstatSync(current);
+      } catch (error2) {
+        if (error2.code === "ENOENT") break;
+        throw error2;
+      }
+      if (currentStats.isSymbolicLink() && !isPathWithin(realRoot, fs5.realpathSync(current))) {
+        throw new Error(invalidPathMessage);
+      }
+    }
+  } catch (error2) {
+    if (error2 instanceof Error && error2.message === invalidPathMessage)
+      throw error2;
+    throw new Error(`${invalidPathMessage}: could not verify symlink targets`);
+  }
+  return resolved;
 }
 async function capture(cmd, args, cwd) {
   let out = "";
@@ -55203,8 +55345,12 @@ async function run() {
     core3.info(`Fixtures:   ${fixturesPathRel}`);
     core3.info(`Key file:   ${sharedKeyFile}`);
     await assertRpcHealthy(rpcUrl);
-    const headFixturesPath = path6.resolve(headWorkspace, fixturesPathRel);
-    const fixtureId = path6.relative(headWorkspace, headFixturesPath);
+    const headFixturesPath = resolveRevisionFixturesPath(
+      headWorkspace,
+      fixturesPathRel,
+      "HEAD"
+    );
+    const fixtureId = path6.relative(path6.resolve(headWorkspace), headFixturesPath).split(path6.sep).join("/");
     const policy = await loadPolicy(
       headWorkspace,
       configPathRel,
@@ -55255,7 +55401,11 @@ async function run() {
       const checkout = await checkoutRef(headWorkspace, baseRef, "base");
       baseDir = checkout.dir;
       baseSha = checkout.sha;
-      const baseFixturesPath = path6.resolve(baseDir, fixturesPathRel);
+      const baseFixturesPath = resolveRevisionFixturesPath(
+        baseDir,
+        fixturesPathRel,
+        "BASE"
+      );
       if (!fs5.existsSync(baseFixturesPath)) {
         throw new Error("fixtures-path not found in base ref");
       } else {

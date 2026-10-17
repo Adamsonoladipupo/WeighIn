@@ -79,6 +79,114 @@ describe("renderComment", () => {
     expect(comment).toContain("Fail msg");
   });
 
+  it("keeps primary evidence visible and folds verbose provenance into details", () => {
+    const diff = createMockDiff(true);
+    const fn = diff.contracts[0].functions[0];
+    fn.case_id = "args:[]";
+    fn.base_provenance = {
+      source: "soroban-simulation",
+      source_version: "28.0.1",
+      protocol: 28,
+      helper_sha256: "a".repeat(64),
+      network_id: "test-network",
+      ledger: 229,
+      header_sha256: "b".repeat(64),
+      snapshot_sha256: "c".repeat(64),
+      config_sha256: "d".repeat(64),
+      compute_config_sha256: "e".repeat(64),
+      input_sha256: "f".repeat(64),
+      seed: [],
+      auth_mode: "recording",
+      host_features: [],
+      resource_limits_sha256: "1".repeat(64),
+    };
+    fn.head_provenance = {
+      ...fn.base_provenance,
+      ledger: 230,
+      helper_sha256: "2".repeat(64),
+      snapshot_sha256: "3".repeat(64),
+      config_sha256: "4".repeat(64),
+      compute_config_sha256: "5".repeat(64),
+      input_sha256: "6".repeat(64),
+      resource_limits_sha256: "7".repeat(64),
+    };
+    fn.metrics[0].head.source = "simulated_instructions";
+    fn.metrics[0].head.limit_source = "protocol_limit";
+    fn.metrics.push({
+      key: "memory_bytes",
+      base: { consumed: null, limit: null, reason: "Unavailable in BASE" },
+      head: {
+        consumed: null,
+        limit: null,
+        reason: "Unsupported by this simulator",
+        source: "native-memory-meter",
+        limit_reason: "No independent cap",
+      },
+      availability: "unavailable",
+      reason: "BASE: Unavailable in BASE; HEAD: Unsupported by this simulator",
+      delta: null,
+      pct: null,
+      regression: false,
+    });
+
+    const report = renderComment(
+      diff,
+      [
+        {
+          contract_id: "contract-a",
+          function_name: "test-fn",
+          case_id: "args:[]",
+          metric: "cpu_instructions",
+          delta: 10,
+          pct: 10,
+          rule: "strict_zero_tolerance",
+          message: "CPU policy breach",
+        },
+      ],
+      "main",
+      "abcdef123",
+    );
+    const detailsStart = report.indexOf(
+      "<details><summary>Snapshot and metric provenance</summary>",
+    );
+    const detailsEnd = report.indexOf("</details>", detailsStart);
+    const beforeDetails = report.slice(0, detailsStart);
+    const details = report.slice(detailsStart, detailsEnd);
+
+    expect(detailsStart).toBeGreaterThan(0);
+    expect(detailsEnd).toBeGreaterThan(detailsStart);
+    expect(beforeDetails).toContain(
+      "Compute source: soroban-simulation 28.0.1; protocol 28.",
+    );
+    expect(beforeDetails).toContain("CPU policy breach");
+    expect(beforeDetails).toContain(
+      "| 🔴 | CPU Instructions | 100 | 110 | +10 | +10.0% | 1,000 |",
+    );
+    expect(beforeDetails).toContain("Unsupported by this simulator");
+    expect(details).toContain("Snapshot ledgers: BASE 229 → HEAD 230.");
+    expect(details).toContain("No independent cap");
+    expect(details).toContain(
+      `Helper SHA256: BASE \`${"a".repeat(64)}\` → HEAD \`${"2".repeat(64)}\`.`,
+    );
+    expect(details).toContain("simulated_instructions");
+    expect(details).toContain("native-memory-meter");
+  });
+
+  it("renders legacy records without provenance as a normal Markdown table", () => {
+    const report = renderComment(
+      createMockDiff(false),
+      [],
+      "main",
+      "abcdef123",
+    );
+    expect(report).toContain(
+      "| | Metric | Base | Head | Delta | Change | Limit |",
+    );
+    expect(report).toContain("#### `test-fn`");
+    expect(report).not.toContain("Snapshot and metric provenance");
+    expect(report).toContain("<!-- weighin-report -->");
+  });
+
   it("formats missing functions and contracts", () => {
     const diff = createMockDiff(false);
     diff.newContracts.push("new-contract");

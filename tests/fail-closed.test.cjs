@@ -106,7 +106,14 @@ test("empty fixture suites and contracts are rejected; zero argument invocations
   );
 });
 
-function action(mode, config = policy, tmpRoot = null, reportPath = null) {
+function action(
+  mode,
+  config = policy,
+  tmpRoot = null,
+  reportPath = null,
+  fixturesPath = "fixtures.json",
+  setupFiles,
+) {
   const temporary =
     tmpRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), "weighin-action-unit-"));
   const keyLogDir = path.join(temporary, "key-log");
@@ -143,6 +150,11 @@ function action(mode, config = policy, tmpRoot = null, reportPath = null) {
     }
     if (config !== null)
       fs.writeFileSync(path.join(temporary, "head/weighin.toml"), config);
+    setupFiles?.({
+      temporary,
+      head: path.join(temporary, "head"),
+      base: path.join(temporary, "base"),
+    });
     const output = path.join(temporary, "outputs"),
       summary = path.join(temporary, "summary");
     fs.writeFileSync(output, "");
@@ -166,7 +178,7 @@ function action(mode, config = policy, tmpRoot = null, reportPath = null) {
           GITHUB_WORKSPACE: path.join(temporary, "head"),
           GITHUB_OUTPUT: output,
           GITHUB_STEP_SUMMARY: summary,
-          "INPUT_FIXTURES-PATH": "fixtures.json",
+          "INPUT_FIXTURES-PATH": fixturesPath,
           "INPUT_CONFIG-PATH": "weighin.toml",
           "INPUT_GITHUB-TOKEN": "",
           "INPUT_BASE-REF": "main",
@@ -184,6 +196,15 @@ function action(mode, config = policy, tmpRoot = null, reportPath = null) {
           .filter(Boolean)
           .map((line) => JSON.parse(line))
       : [];
+    const buildLogFile = path.join(keyLogDir, "builds.jsonl");
+    const builds = fs.existsSync(buildLogFile)
+      ? fs
+          .readFileSync(buildLogFile, "utf8")
+          .trim()
+          .split(/\n+/)
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
     const reportFilePath = reportPath ? path.join(temporary, "head", reportPath) : null;
     const reportContent = reportFilePath && fs.existsSync(reportFilePath)
       ? fs.readFileSync(reportFilePath, "utf8")
@@ -194,6 +215,7 @@ function action(mode, config = policy, tmpRoot = null, reportPath = null) {
       summary: fs.readFileSync(summary, "utf8"),
       missingConfig: loadConfig(path.join(temporary, "missing.toml")),
       keyPaths,
+      builds,
       reportContent,
     };
   } finally {
@@ -202,6 +224,7 @@ function action(mode, config = policy, tmpRoot = null, reportPath = null) {
 }
 for (const [mode, message] of [
   ["funding-exhausted", /Account readiness failed within 120s/],
+  ["rpc-invalid-envelope", /response ID does not match request/],
   ["rpc-unhealthy", /RPC has not reported healthy/],
   ["checkout", /unit checkout failure/],
   ["worktree", /unit worktree failure/],
@@ -225,6 +248,101 @@ for (const [mode, message] of [
     assert.match(result.summary, message);
     assert.match(result.summary, /No passing comparison/);
   });
+test("Action rejects a mismatched health response before account readiness or builds", () => {
+  const result = action("rpc-invalid-envelope");
+  assert.equal(result.status, 1);
+  assert.match(result.summary, /response ID does not match request/);
+  assert.equal(result.keyPaths.length, 0);
+});
+
+test("Action rejects absolute and escaping fixture paths before measuring HEAD", () => {
+  for (const fixturesPath of [
+    "/tmp/outside-fixtures.json",
+    "../outside-fixtures.json",
+    "C:\\repo\\fixtures.json",
+  ]) {
+    const result = action("control", policy, null, null, fixturesPath);
+    assert.equal(result.status, 1, fixturesPath);
+    assert.match(result.summary, /fixtures-path for HEAD must be a relative path inside the HEAD worktree/);
+    assert.equal(result.keyPaths.length, 0, fixturesPath);
+  }
+});
+
+test("Action rejects an existing HEAD symlink that points outside its workspace", () => {
+  for (const kind of ["file", "directory"]) {
+    const result = action(
+      "control",
+      policy,
+      null,
+      null,
+      "nested/fixtures.json",
+      ({ temporary, head }) => {
+        const external = path.join(temporary, "outside-fixtures");
+        fs.mkdirSync(external);
+        fs.writeFileSync(path.join(external, "fixtures.json"), JSON.stringify({ contracts: [] }));
+        fs.mkdirSync(path.join(head, "nested"));
+        if (kind === "directory") fs.rmdirSync(path.join(head, "nested"));
+        fs.symlinkSync(
+          kind === "file" ? path.join(external, "fixtures.json") : external,
+          kind === "file" ? path.join(head, "nested/fixtures.json") : path.join(head, "nested"),
+          kind === "file" ? "file" : "dir",
+        );
+      },
+    );
+    assert.equal(result.status, 1, kind);
+    assert.match(result.summary, /fixtures-path for HEAD must be a relative path inside the HEAD worktree/);
+    assert.equal(result.keyPaths.length, 0, kind);
+  }
+});
+
+test("Action validates BASE symlinks before BASE measurement and accepts normalized nested fixture paths with either ID form", () => {
+  const baseEscape = action(
+    "control",
+    policy,
+    null,
+    null,
+    "nested/fixtures.json",
+    ({ temporary, head, base }) => {
+      fs.mkdirSync(path.join(head, "nested"));
+      fs.mkdirSync(path.join(base, "nested"));
+      const fixture = JSON.stringify({ contracts: [{ id: "explicit:contract", wasm_path: "../contract/contract.wasm", invocations: [{ function_name: "hello", args: [] }] }] });
+      fs.writeFileSync(path.join(head, "nested/fixtures.json"), fixture);
+      const external = path.join(temporary, "outside-fixtures.json");
+      fs.writeFileSync(external, fixture);
+      fs.symlinkSync(external, path.join(base, "nested/fixtures.json"));
+    },
+  );
+  assert.equal(baseEscape.status, 1);
+  assert.match(baseEscape.summary, /fixtures-path for BASE must be a relative path inside the BASE worktree/);
+  assert.equal(baseEscape.keyPaths.length, 1, "HEAD may measure, BASE must fail before measurement");
+  assert.deepEqual(baseEscape.builds.map(({ revision }) => revision), ["HEAD"]);
+
+  for (const explicitId of [false, true]) {
+    const fixture = {
+      contracts: [{
+        ...(explicitId ? { id: "explicit:contract" } : {}),
+        wasm_path: "../contract/contract.wasm",
+        invocations: [{ function_name: "hello", args: [] }],
+      }],
+    };
+    const result = action(
+      "control",
+      policy,
+      null,
+      null,
+      "nested/./fixtures.json",
+      ({ head, base }) => {
+        for (const revision of [head, base]) {
+          fs.mkdirSync(path.join(revision, "nested"));
+          fs.writeFileSync(path.join(revision, "nested/fixtures.json"), JSON.stringify(fixture));
+        }
+      },
+    );
+    assert.equal(result.status, 0);
+    assert.equal(result.keyPaths.length, 2);
+    assert.deepEqual(result.keyPaths.map(({ fixtureId }) => fixtureId), ["nested/fixtures.json", "nested/fixtures.json"]);
+  }
+});
 for (const config of [
   "not valid toml = ",
   '[thresholds.functions.hello]\ncpu_instructions="typo"',

@@ -1,7 +1,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
+import {
+  parseJsonRpcResponse,
+  redactEndpointSecrets,
+  sanitizeEndpoint,
+} from "./endpoint";
 import { execFile } from "child_process";
 import { Keypair, Transaction, xdr } from "@stellar/stellar-sdk";
 import { z } from "zod";
@@ -583,6 +587,8 @@ class RpcError extends Error {
   }
 }
 
+let nextRpcRequestId = 0;
+
 // Only the error actually observed during live snapshot reads is retryable.
 // HTTP failures, other RPC errors and simulation/helper failures remain fatal.
 function isTransientLedgerRead(failure: unknown): boolean {
@@ -613,11 +619,17 @@ async function callRpc(
   const combinedSignal = signal
     ? AbortSignal.any([signal, timeoutSignal])
     : timeoutSignal;
+  const requestId = ++nextRpcRequestId;
   try {
     response = await fetch(rpcUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: requestId,
+        method,
+        params,
+      }),
       signal: combinedSignal,
     });
   } catch (error) {
@@ -632,10 +644,29 @@ async function callRpc(
     throw new Error(
       `RPC ${method}: HTTP ${response.status} at ${sanitizeEndpoint(rpcUrl)}`,
     );
-  const body = (await response.json()) as { error?: unknown; result?: unknown };
-  if (body.error || body.result === undefined)
-    throw new RpcError(method, body.error, rpcUrl);
-  return body.result;
+  let responseBody: string;
+  try {
+    responseBody = await response.text();
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`RPC ${method} cancelled`);
+    }
+    throw new Error(
+      `RPC ${method} response transport failure at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String((error as any)?.message ?? error), rpcUrl)}`,
+    );
+  }
+  let envelope;
+  try {
+    envelope = parseJsonRpcResponse(responseBody, requestId);
+  } catch (error) {
+    throw new Error(
+      `RPC ${method} invalid response at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String((error as Error)?.message ?? error), rpcUrl)}`,
+    );
+  }
+  if ("error" in envelope) {
+    throw new RpcError(method, envelope.error, rpcUrl);
+  }
+  return envelope.result;
 }
 
 export interface MeasureInvocationOptions {

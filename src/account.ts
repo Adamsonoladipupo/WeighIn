@@ -1,5 +1,9 @@
 import { Keypair, xdr } from "@stellar/stellar-sdk";
-import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
+import {
+  parseJsonRpcResponse,
+  redactEndpointSecrets,
+  sanitizeEndpoint,
+} from "./endpoint";
 
 const DEADLINE_MS = 120_000;
 const REQUEST_MS = 15_000;
@@ -40,6 +44,7 @@ export async function ensureAccountReady(
   const deadline = Date.now() + DEADLINE_MS;
   let funded = false,
     lastError = "account has not appeared in RPC";
+  let requestId = 0;
   async function request(
     url: string,
     options: RequestInit = {},
@@ -87,25 +92,34 @@ export async function ensureAccountReady(
     if (signal?.aborted)
       throw signal.reason || new Error("Account readiness cancelled");
     try {
+      const id = ++requestId;
       const response = await request(rpcUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           jsonrpc: "2.0",
-          id: 1,
+          id,
           method: "getLedgerEntries",
           params: { keys: [key] },
         }),
       });
-      const json = JSON.parse(response) as any;
-      if (json.error)
+      let json;
+      try {
+        json = parseJsonRpcResponse(response, id);
+      } catch (error) {
         throw new Error(
-          `Account readiness RPC error at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(json.error), rpcUrl)}`,
+          `Account readiness invalid RPC response at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String((error as Error)?.message ?? error), rpcUrl)}`,
         );
-      const entries = json.result?.entries;
+      }
+      if ("error" in json)
+        throw new Error(
+          `Account readiness RPC method error at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(JSON.stringify(json.error), rpcUrl)}`,
+        );
+      const result = json.result as any;
+      const entries = result?.entries;
       if (
-        !Number.isInteger(json.result?.latestLedger) ||
-        json.result.latestLedger <= 0 ||
+        !Number.isInteger(result?.latestLedger) ||
+        result.latestLedger <= 0 ||
         !Array.isArray(entries) ||
         entries.length > 1
       )
