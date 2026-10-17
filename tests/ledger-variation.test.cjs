@@ -75,11 +75,7 @@ test('all five controlled ledger-progression samples replay through public measu
       const req = JSON.parse(fetchOptions.body);
       const matched = runRpc.find((c) => c.request.method === req.method);
       assert.ok(matched, `Unexpected RPC method ${req.method} during run ${run.run} replay`);
-      return {
-        ok: true,
-        status: 200,
-        json: async () => matched.raw,
-      };
+      return new Response(JSON.stringify({ ...matched.raw, jsonrpc: '2.0', id: req.id }));
     });
 
     t.mock.method(cp, 'execFile', (file, _args, _options, callback) => {

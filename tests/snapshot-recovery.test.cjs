@@ -56,7 +56,11 @@ function scenario(t,options={}){
       result={ledgers:[{sequence:baseLedger+state.simulations-1,headerXdr:history.toXDR('base64')}]};
     }
     const error=options.error?.(request.method,state);
-    return {ok:!options.httpFailure,status:options.httpFailure?404:200,json:async()=>error?{error}:{result}};
+    let envelope=error?{jsonrpc:'2.0',id:request.id,error}:{jsonrpc:'2.0',id:request.id,result};
+    if(options.badEnvelope==='wrong-id'&&request.method==='getNetwork')envelope={...envelope,id:request.id+1};
+    if(options.badEnvelope==='both'&&request.method==='getNetwork')envelope={...envelope,error:{code:-32603,message:'conflicting response'}};
+    if(options.badEnvelope==='wrong-version'&&request.method==='getNetwork')envelope={...envelope,jsonrpc:'1.0'};
+    return new Response(JSON.stringify(envelope),{status:options.httpFailure?404:200});
   });
   t.mock.method(cp,'execFile',(file,args,childOptions,callback)=>{
     assert.equal(file,__filename);
@@ -99,6 +103,15 @@ test('observed ledger-read failure recovers by re-simulating and returning only 
   const result=await run();assert.equal(result.output.cpu_instructions_consumed,replay.output.cpu_instructions_consumed);
   assert.equal(result.provenance.ledger,baseLedger+1);assert.equal(state.simulations,2);
   assert.equal(state.helpers.length,1);assert.deepEqual(state.delays,[250]);assert.equal(state.warnings.length,1);
+});
+
+test('malformed JSON-RPC responses stop measurement before any native helper call', async t=>{
+  for(const badEnvelope of ['wrong-id','both','wrong-version']){
+    const {state,run}=scenario(t,{badEnvelope});
+    await assert.rejects(run(),/RPC getNetwork invalid response.*(?:ID does not match|exactly one|jsonrpc version)/);
+    assert.equal(state.helpers.length,0);
+    t.mock.restoreAll();
+  }
 });
 test('three transient read failures recover on the fourth complete capture with bounded delays',async t=>{
   const {state,run}=scenario(t,{error:(method,s)=>method==='getLedgerEntries'&&s.reads<=3?transient:null});

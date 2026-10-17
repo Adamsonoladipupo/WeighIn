@@ -19,7 +19,11 @@ import { renderComment } from "./comment";
 import { buildForRevision, parseOptionalBooleanInput } from "./build-selection";
 import { writeReportFile, generateFailureReport } from "./report";
 import { buildPrMetadata } from "./pr-metadata";
-import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
+import {
+  parseJsonRpcResponse,
+  redactEndpointSecrets,
+  sanitizeEndpoint,
+} from "./endpoint";
 
 // The configured endpoint is tracked only so the terminal failure path can
 // redact any credential it may contain before reporting.
@@ -46,11 +50,13 @@ async function assertRpcHealthy(rpcUrl: string): Promise<void> {
     if (!res.ok) {
       throw new Error(`HTTP ${res.status} ${res.statusText}`);
     }
-    const json = (await res.json()) as any;
-    if (json.error) {
-      throw new Error(`RPC error: ${JSON.stringify(json.error)}`);
+    const health = parseJsonRpcResponse(await res.text(), 1);
+    if ("error" in health) {
+      throw new Error(
+        `RPC getHealth method error: ${JSON.stringify(health.error)}`,
+      );
     }
-    if (json.result?.status !== "healthy")
+    if ((health.result as any)?.status !== "healthy")
       throw new Error("RPC has not reported healthy");
     const network = await fetch(rpcUrl, {
       method: "POST",
@@ -60,15 +66,20 @@ async function assertRpcHealthy(rpcUrl: string): Promise<void> {
     });
     if (!network.ok)
       throw new Error(`HTTP ${network.status} ${network.statusText}`);
-    const metadata = (await network.json()) as any;
+    const metadata = parseJsonRpcResponse(await network.text(), 2);
+    if ("error" in metadata) {
+      throw new Error(
+        `RPC getNetwork method error: ${JSON.stringify(metadata.error)}`,
+      );
+    }
+    const networkResult = metadata.result as { passphrase?: unknown } | null;
     if (
-      metadata.error ||
-      typeof metadata.result?.passphrase !== "string" ||
-      !metadata.result.passphrase.trim()
+      typeof networkResult?.passphrase !== "string" ||
+      !networkResult.passphrase.trim()
     ) {
       throw new Error("Invalid RPC network metadata");
     }
-    core.info(`RPC healthy — network: ${metadata.result.passphrase}`);
+    core.info(`RPC healthy — network: ${networkResult.passphrase}`);
   } catch (err: any) {
     core.setFailed(
       `Soroban RPC at ${sanitizeEndpoint(rpcUrl)} is not reachable: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}\n` +
@@ -77,6 +88,64 @@ async function assertRpcHealthy(rpcUrl: string): Promise<void> {
     );
     throw err; // halt execution
   }
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+/** Resolve fixture inputs only when the lexical and real paths stay in a revision. */
+function resolveRevisionFixturesPath(
+  worktreeRoot: string,
+  fixturesPathInput: string,
+  revision: "HEAD" | "BASE",
+): string {
+  const invalidPathMessage = `fixtures-path for ${revision} must be a relative path inside the ${revision} worktree`;
+  if (
+    !fixturesPathInput.trim() ||
+    path.isAbsolute(fixturesPathInput) ||
+    path.win32.isAbsolute(fixturesPathInput) ||
+    /^[A-Za-z]:/.test(fixturesPathInput)
+  ) {
+    throw new Error(invalidPathMessage);
+  }
+
+  const root = path.resolve(worktreeRoot);
+  const resolved = path.resolve(root, fixturesPathInput);
+  if (!isPathWithin(root, resolved)) throw new Error(invalidPathMessage);
+
+  try {
+    const realRoot = fs.realpathSync(root);
+    let current = root;
+    for (const segment of path.relative(root, resolved).split(path.sep)) {
+      if (!segment) continue;
+      current = path.join(current, segment);
+      let currentStats: fs.Stats;
+      try {
+        currentStats = fs.lstatSync(current);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+        throw error;
+      }
+      if (
+        currentStats.isSymbolicLink() &&
+        !isPathWithin(realRoot, fs.realpathSync(current))
+      ) {
+        throw new Error(invalidPathMessage);
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === invalidPathMessage)
+      throw error;
+    throw new Error(`${invalidPathMessage}: could not verify symlink targets`);
+  }
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,8 +408,15 @@ async function run(): Promise<void> {
     await assertRpcHealthy(rpcUrl);
 
     // 2. Resolve paths from the HEAD workspace (fixtures, config live there)
-    const headFixturesPath = path.resolve(headWorkspace, fixturesPathRel);
-    const fixtureId = path.relative(headWorkspace, headFixturesPath);
+    const headFixturesPath = resolveRevisionFixturesPath(
+      headWorkspace,
+      fixturesPathRel,
+      "HEAD",
+    );
+    const fixtureId = path
+      .relative(path.resolve(headWorkspace), headFixturesPath)
+      .split(path.sep)
+      .join("/");
     const policy = await loadPolicy(
       headWorkspace,
       configPathRel,
@@ -402,7 +478,11 @@ async function run(): Promise<void> {
       baseSha = checkout.sha;
 
       // The fixtures file in the base worktree — same relative path
-      const baseFixturesPath = path.resolve(baseDir, fixturesPathRel);
+      const baseFixturesPath = resolveRevisionFixturesPath(
+        baseDir,
+        fixturesPathRel,
+        "BASE",
+      );
       if (!fs.existsSync(baseFixturesPath)) {
         throw new Error("fixtures-path not found in base ref");
       } else {
