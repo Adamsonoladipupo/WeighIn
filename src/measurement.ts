@@ -710,3 +710,26 @@ export async function runMeasurement(
 
   return results;
 }
+
+export {
+  METRIC_KEYS,
+  MetricKey,
+  CURRENT_RECORD_SCHEMA_VERSION,
+  SUPPORTED_RECORD_SCHEMA_VERSIONS,
+  SUPPORTED_MEASUREMENT_ENVELOPES,
+  RUNTIME_RECORD_INVARIANTS,
+  MeasurementRecordValidationError,
+  detectRecordEnvelopeVersion,
+  inspectMeasurementRecord,
+  validateMeasurementRecord,
+  inspectMeasurementRecords,
+  validateMeasurementRecords,
+  resolveContractIdentityKey,
+  validateBenchmarkComparisonCompatibility,
+  getMeasurementRecordJsonSchema,
+  RecordSchemaVersion,
+  MeasurementEnvelopeVersion,
+  RecordValidationDiagnostic,
+  SingleRecordValidationResult,
+  RecordValidationResult,
+} from "./record-schema";

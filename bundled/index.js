@@ -35168,7 +35168,7 @@ var coerce = {
 };
 var NEVER = INVALID;
 
-// src/diff.ts
+// src/record-schema.ts
 var METRIC_KEYS = [
   "cpu_instructions",
   "memory_bytes",
@@ -35182,26 +35182,628 @@ var METRIC_KEYS = [
   "events_count",
   "event_data_bytes"
 ];
+var MeasurementRecordValidationError = class extends Error {
+  path;
+  version;
+  code;
+  diagnostics;
+  constructor(diagnostics) {
+    const first = diagnostics[0] ?? {
+      path: "$",
+      version: "unknown",
+      code: "INVALID_RECORD",
+      message: "Invalid measurement record"
+    };
+    super(`${first.message} [path: ${first.path}]`);
+    this.name = "MeasurementRecordValidationError";
+    this.path = first.path;
+    this.version = first.version;
+    this.code = first.code;
+    this.diagnostics = diagnostics;
+  }
+};
+var CONTRACT_ALLOWED_KEYS = /* @__PURE__ */ new Set([
+  "schema_version",
+  "fixture_id",
+  "logical_id",
+  "contract_id",
+  "git_commit",
+  "soroban_sdk_version",
+  "timestamp",
+  "benchmarks"
+]);
+var BENCHMARK_ALLOWED_KEYS = /* @__PURE__ */ new Set([
+  "function_name",
+  "case_id",
+  "metrics",
+  "wasm_sha256",
+  "provenance"
+]);
+var METRIC_VALUE_ALLOWED_KEYS = /* @__PURE__ */ new Set([
+  "availability",
+  "consumed",
+  "limit",
+  "reason",
+  "source",
+  "limit_source",
+  "limit_reason"
+]);
+var PROVENANCE_ALLOWED_KEYS = /* @__PURE__ */ new Set([
+  "source",
+  "source_version",
+  "protocol",
+  "helper_sha256",
+  "network_id",
+  "ledger",
+  "header_sha256",
+  "snapshot_sha256",
+  "config_sha256",
+  "compute_config_sha256",
+  "input_sha256",
+  "seed",
+  "auth_mode",
+  "host_features",
+  "resource_limits_sha256"
+]);
+var PROVENANCE_REQUIRED_STRINGS = [
+  "source",
+  "source_version",
+  "helper_sha256",
+  "network_id",
+  "compute_config_sha256",
+  "header_sha256",
+  "snapshot_sha256",
+  "config_sha256",
+  "input_sha256",
+  "auth_mode"
+];
+var METRIC_KEY_SET = new Set(METRIC_KEYS);
+var SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+function isPlainObject3(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function nonblank(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function detectRecordEnvelopeVersion(record) {
+  if (!isPlainObject3(record)) return "unknown";
+  const hasLogical = record.schema_version !== void 0 || record.fixture_id !== void 0 || record.logical_id !== void 0;
+  if (!hasLogical) return "legacy";
+  if (record.schema_version === 2 || record.schema_version === 3 || record.schema_version === 4) {
+    return record.schema_version;
+  }
+  return "unknown";
+}
+function validateProvenanceObject(provenance, version2, pPath, diagnostics) {
+  if (!isPlainObject3(provenance)) {
+    diagnostics.push({
+      path: pPath,
+      version: version2,
+      code: "INVALID_PROVENANCE_OBJECT",
+      message: `Schema ${version2} benchmarks require compute provenance`
+    });
+    return;
+  }
+  for (const key of Object.keys(provenance)) {
+    if (!PROVENANCE_ALLOWED_KEYS.has(key)) {
+      diagnostics.push({
+        path: `${pPath}.${key}`,
+        version: version2,
+        code: "UNKNOWN_PROVENANCE_FIELD",
+        message: `Invalid compute provenance: unexpected field ${key}`
+      });
+    }
+  }
+  for (const field of PROVENANCE_REQUIRED_STRINGS) {
+    if (!nonblank(provenance[field])) {
+      diagnostics.push({
+        path: `${pPath}.${field}`,
+        version: version2,
+        code: "INVALID_PROVENANCE_FIELD",
+        message: `Invalid compute provenance: ${field}`
+      });
+    }
+  }
+  if (!Number.isSafeInteger(provenance.ledger) || provenance.ledger < 0) {
+    diagnostics.push({
+      path: `${pPath}.ledger`,
+      version: version2,
+      code: "INVALID_PROVENANCE_LEDGER",
+      message: "Invalid compute provenance: ledger/protocol/host_features"
+    });
+  }
+  if (!Number.isSafeInteger(provenance.protocol) || provenance.protocol <= 0) {
+    diagnostics.push({
+      path: `${pPath}.protocol`,
+      version: version2,
+      code: "INVALID_PROVENANCE_PROTOCOL",
+      message: "Invalid compute provenance: ledger/protocol/host_features"
+    });
+  }
+  if (!Array.isArray(provenance.host_features) || !provenance.host_features.every(nonblank)) {
+    diagnostics.push({
+      path: `${pPath}.host_features`,
+      version: version2,
+      code: "INVALID_PROVENANCE_HOST_FEATURES",
+      message: "Invalid compute provenance: ledger/protocol/host_features"
+    });
+  }
+  if (!Array.isArray(provenance.seed) || provenance.seed.length !== 32 || !provenance.seed.every(
+    (value) => Number.isInteger(value) && value >= 0 && value <= 255
+  )) {
+    diagnostics.push({
+      path: `${pPath}.seed`,
+      version: version2,
+      code: "INVALID_PROVENANCE_SEED",
+      message: "Invalid compute provenance: seed"
+    });
+  }
+  if (provenance.resource_limits_sha256 !== void 0 && (typeof provenance.resource_limits_sha256 !== "string" || !SHA256_HEX_PATTERN.test(provenance.resource_limits_sha256))) {
+    diagnostics.push({
+      path: `${pPath}.resource_limits_sha256`,
+      version: version2,
+      code: "INVALID_RESOURCE_LIMITS_DIGEST",
+      message: "Schema 4 requires resource_limits_sha256"
+    });
+  }
+}
+function inspectMeasurementRecord(value, index) {
+  const basePath = index === void 0 ? "$" : `$[${index}]`;
+  const diagnostics = [];
+  if (!isPlainObject3(value)) {
+    diagnostics.push({
+      path: basePath,
+      version: "unknown",
+      code: "INVALID_RECORD_OBJECT",
+      message: "Invalid measurement record: expected object"
+    });
+    return { valid: false, version: "unknown", diagnostics };
+  }
+  const version2 = detectRecordEnvelopeVersion(value);
+  for (const key of Object.keys(value)) {
+    if (!CONTRACT_ALLOWED_KEYS.has(key)) {
+      diagnostics.push({
+        path: `${basePath}.${key}`,
+        version: version2,
+        code: "UNKNOWN_CONTRACT_FIELD",
+        message: `Unexpected field in measurement record: ${key}`
+      });
+    }
+  }
+  const hasLogical = value.schema_version !== void 0 || value.fixture_id !== void 0 || value.logical_id !== void 0;
+  const benchmarksArray = Array.isArray(value.benchmarks) ? value.benchmarks : null;
+  let contractKey;
+  if (!hasLogical) {
+    if (benchmarksArray) {
+      benchmarksArray.forEach((fn, bIdx) => {
+        if (isPlainObject3(fn) && fn.case_id !== void 0) {
+          diagnostics.push({
+            path: `${basePath}.benchmarks[${bIdx}].case_id`,
+            version: "legacy",
+            code: "LEGACY_CASE_ID_FORBIDDEN",
+            message: "Case identity requires fixture and logical contract identities"
+          });
+        }
+      });
+    }
+    if (nonblank(value.contract_id)) {
+      contractKey = JSON.stringify(["legacy", value.contract_id]);
+    }
+  } else {
+    if (value.schema_version !== 2 && value.schema_version !== 3 && value.schema_version !== 4) {
+      diagnostics.push({
+        path: `${basePath}.schema_version`,
+        version: "unknown",
+        code: "UNSUPPORTED_SCHEMA_VERSION",
+        message: "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
+      });
+    }
+    if (!nonblank(value.fixture_id)) {
+      diagnostics.push({
+        path: `${basePath}.fixture_id`,
+        version: version2,
+        code: "MISSING_FIXTURE_ID",
+        message: "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
+      });
+    }
+    if (!nonblank(value.logical_id)) {
+      diagnostics.push({
+        path: `${basePath}.logical_id`,
+        version: version2,
+        code: "MISSING_LOGICAL_ID",
+        message: "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
+      });
+    }
+    if (benchmarksArray) {
+      benchmarksArray.forEach((fn, bIdx) => {
+        if (!isPlainObject3(fn) || !nonblank(fn.case_id)) {
+          diagnostics.push({
+            path: `${basePath}.benchmarks[${bIdx}].case_id`,
+            version: version2,
+            code: "MISSING_CASE_ID",
+            message: "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
+          });
+        }
+      });
+    }
+    if ((version2 === 2 || version2 === 3 || version2 === 4) && nonblank(value.fixture_id) && nonblank(value.logical_id)) {
+      contractKey = JSON.stringify([
+        "logical",
+        value.fixture_id,
+        value.logical_id
+      ]);
+    }
+  }
+  if (!nonblank(value.contract_id)) {
+    diagnostics.push({
+      path: `${basePath}.contract_id`,
+      version: version2,
+      code: "INVALID_CONTRACT_ID",
+      message: "Contract contract_id must not be blank"
+    });
+  }
+  if (!nonblank(value.git_commit)) {
+    diagnostics.push({
+      path: `${basePath}.git_commit`,
+      version: version2,
+      code: "INVALID_GIT_COMMIT",
+      message: "Contract git_commit must not be blank"
+    });
+  }
+  if (!nonblank(value.soroban_sdk_version)) {
+    diagnostics.push({
+      path: `${basePath}.soroban_sdk_version`,
+      version: version2,
+      code: "INVALID_SDK_VERSION",
+      message: "Contract soroban_sdk_version must not be blank"
+    });
+  }
+  if (!Number.isSafeInteger(value.timestamp) || value.timestamp < 0) {
+    diagnostics.push({
+      path: `${basePath}.timestamp`,
+      version: version2,
+      code: "INVALID_TIMESTAMP",
+      message: "Contract timestamp must be a non-negative safe integer"
+    });
+  }
+  if (!benchmarksArray) {
+    diagnostics.push({
+      path: `${basePath}.benchmarks`,
+      version: version2,
+      code: "INVALID_BENCHMARKS_ARRAY",
+      message: "Contract benchmarks must be an array"
+    });
+    return { valid: false, version: version2, diagnostics };
+  }
+  const seenBenchmarks = /* @__PURE__ */ new Set();
+  benchmarksArray.forEach((benchmark, bIdx) => {
+    const bPath = `${basePath}.benchmarks[${bIdx}]`;
+    if (!isPlainObject3(benchmark)) {
+      diagnostics.push({
+        path: bPath,
+        version: version2,
+        code: "INVALID_BENCHMARK_OBJECT",
+        message: "Invalid benchmark result: expected object"
+      });
+      return;
+    }
+    for (const key of Object.keys(benchmark)) {
+      if (!BENCHMARK_ALLOWED_KEYS.has(key)) {
+        diagnostics.push({
+          path: `${bPath}.${key}`,
+          version: version2,
+          code: "UNKNOWN_BENCHMARK_FIELD",
+          message: `Unexpected field in benchmark record: ${key}`
+        });
+      }
+    }
+    if (!nonblank(benchmark.function_name)) {
+      diagnostics.push({
+        path: `${bPath}.function_name`,
+        version: version2,
+        code: "INVALID_FUNCTION_NAME",
+        message: "Benchmark function_name must not be blank"
+      });
+    } else {
+      const benchKey = JSON.stringify([
+        benchmark.function_name,
+        benchmark.case_id ?? null
+      ]);
+      if (seenBenchmarks.has(benchKey)) {
+        diagnostics.push({
+          path: bPath,
+          version: version2,
+          code: "DUPLICATE_BENCHMARK_IDENTITY",
+          message: `Duplicate benchmark identity: ${benchKey}`
+        });
+      } else {
+        seenBenchmarks.add(benchKey);
+      }
+    }
+    if (!nonblank(benchmark.wasm_sha256)) {
+      diagnostics.push({
+        path: `${bPath}.wasm_sha256`,
+        version: version2,
+        code: "INVALID_WASM_SHA256",
+        message: "Benchmark wasm_sha256 must not be blank"
+      });
+    }
+    const metricsObj = benchmark.metrics;
+    if (!isPlainObject3(metricsObj)) {
+      diagnostics.push({
+        path: `${bPath}.metrics`,
+        version: version2,
+        code: "INVALID_METRICS_OBJECT",
+        message: "Missing metric cpu_instructions; use an explicit unavailable record"
+      });
+    } else {
+      for (const extraKey of Object.keys(metricsObj)) {
+        if (!METRIC_KEY_SET.has(extraKey)) {
+          diagnostics.push({
+            path: `${bPath}.metrics.${extraKey}`,
+            version: version2,
+            code: "UNKNOWN_METRIC_KEY",
+            message: `Unexpected metric key: ${extraKey}`
+          });
+        }
+      }
+      for (const key of METRIC_KEYS) {
+        const mPath = `${bPath}.metrics.${key}`;
+        const metricVal = metricsObj[key];
+        if (!isPlainObject3(metricVal)) {
+          diagnostics.push({
+            path: mPath,
+            version: version2,
+            code: "MISSING_METRIC",
+            message: `Missing metric ${key}; use an explicit unavailable record`
+          });
+          continue;
+        }
+        for (const fieldKey of Object.keys(metricVal)) {
+          if (!METRIC_VALUE_ALLOWED_KEYS.has(fieldKey)) {
+            diagnostics.push({
+              path: `${mPath}.${fieldKey}`,
+              version: version2,
+              code: "UNKNOWN_METRIC_FIELD",
+              message: `Invalid metric field ${key}.${fieldKey}`
+            });
+          }
+        }
+        if (metricVal.availability !== void 0 && metricVal.availability !== "measured" && metricVal.availability !== "unavailable") {
+          diagnostics.push({
+            path: `${mPath}.availability`,
+            version: version2,
+            code: "INVALID_METRIC_AVAILABILITY",
+            message: `Invalid metric availability ${key}`
+          });
+        }
+        if (metricVal.availability === "unavailable") {
+          if (metricVal.consumed !== null || !nonblank(metricVal.reason)) {
+            diagnostics.push({
+              path: metricVal.consumed !== null ? `${mPath}.consumed` : `${mPath}.reason`,
+              version: version2,
+              code: "INVALID_UNAVAILABLE_METRIC",
+              message: `Invalid unavailable metric ${key}`
+            });
+          }
+        } else if (metricVal.consumed === null || !Number.isSafeInteger(metricVal.consumed) || metricVal.consumed < 0) {
+          diagnostics.push({
+            path: `${mPath}.consumed`,
+            version: version2,
+            code: "INVALID_MEASURED_METRIC",
+            message: `Invalid measured metric ${key}`
+          });
+        }
+        if (metricVal.limit !== null && (!Number.isSafeInteger(metricVal.limit) || metricVal.limit < 0)) {
+          diagnostics.push({
+            path: `${mPath}.limit`,
+            version: version2,
+            code: "INVALID_METRIC_LIMIT",
+            message: `Invalid metric limit ${key}`
+          });
+        }
+      }
+    }
+    if (version2 === 3 || version2 === 4) {
+      if (!benchmark.provenance) {
+        diagnostics.push({
+          path: `${bPath}.provenance`,
+          version: version2,
+          code: "MISSING_PROVENANCE",
+          message: `Schema ${version2} benchmarks require compute provenance`
+        });
+      } else {
+        validateProvenanceObject(
+          benchmark.provenance,
+          version2,
+          `${bPath}.provenance`,
+          diagnostics
+        );
+      }
+      if (isPlainObject3(metricsObj)) {
+        for (const key of METRIC_KEYS) {
+          const mPath = `${bPath}.metrics.${key}`;
+          const metricVal = metricsObj[key];
+          if (!isPlainObject3(metricVal)) continue;
+          if (metricVal.availability === void 0 || metricVal.availability === "measured" && !nonblank(metricVal.source)) {
+            diagnostics.push({
+              path: metricVal.availability === void 0 ? `${mPath}.availability` : `${mPath}.source`,
+              version: version2,
+              code: "MISSING_METRIC_SOURCE_OR_AVAILABILITY",
+              message: `Schema ${version2} requires explicit availability and measured source for ${key}`
+            });
+          }
+          if (version2 === 4 && metricVal.availability === "measured") {
+            if (metricVal.limit === null ? !nonblank(metricVal.limit_reason) : !nonblank(metricVal.limit_source)) {
+              diagnostics.push({
+                path: metricVal.limit === null ? `${mPath}.limit_reason` : `${mPath}.limit_source`,
+                version: version2,
+                code: "MISSING_METRIC_LIMIT_PROVENANCE",
+                message: `Schema 4 requires explicit limit provenance for ${key}`
+              });
+            }
+          }
+        }
+      }
+      if (version2 === 4 && isPlainObject3(benchmark.provenance) && !SHA256_HEX_PATTERN.test(
+        benchmark.provenance.resource_limits_sha256 ?? ""
+      )) {
+        const alreadyReported = diagnostics.some(
+          (d) => d.path === `${bPath}.provenance.resource_limits_sha256`
+        );
+        if (!alreadyReported) {
+          diagnostics.push({
+            path: `${bPath}.provenance.resource_limits_sha256`,
+            version: version2,
+            code: "MISSING_RESOURCE_LIMITS_DIGEST",
+            message: "Schema 4 requires resource_limits_sha256"
+          });
+        }
+      }
+    } else if (benchmark.provenance !== void 0) {
+      validateProvenanceObject(
+        benchmark.provenance,
+        version2,
+        `${bPath}.provenance`,
+        diagnostics
+      );
+    }
+  });
+  if (diagnostics.length > 0) {
+    return { valid: false, version: version2, diagnostics };
+  }
+  return {
+    valid: true,
+    version: version2,
+    contractKey,
+    record: value,
+    diagnostics: []
+  };
+}
+function inspectMeasurementRecords(value) {
+  if (!Array.isArray(value)) {
+    return {
+      valid: false,
+      version: "unknown",
+      diagnostics: [
+        {
+          path: "$",
+          version: "unknown",
+          code: "INVALID_RECORDS_ARRAY",
+          message: "Invalid measurement records: expected array"
+        }
+      ]
+    };
+  }
+  const diagnostics = [];
+  const seenContractKeys = /* @__PURE__ */ new Set();
+  const records = [];
+  let detectedVersion = null;
+  value.forEach((item, index) => {
+    const single = inspectMeasurementRecord(item, index);
+    if (detectedVersion === null) {
+      detectedVersion = single.version;
+    } else if (single.version !== "unknown" && detectedVersion !== "unknown" && single.version !== detectedVersion) {
+      diagnostics.push({
+        path: `$[${index}].schema_version`,
+        version: single.version,
+        code: "MIXED_SCHEMA_VERSIONS",
+        message: "Cannot compare measurements with different schema versions"
+      });
+    }
+    if (single.contractKey !== void 0) {
+      if (seenContractKeys.has(single.contractKey)) {
+        diagnostics.push({
+          path: `$[${index}]`,
+          version: single.version,
+          code: "DUPLICATE_CONTRACT_IDENTITY",
+          message: `Duplicate logical contract identity: ${single.contractKey}`
+        });
+      } else {
+        seenContractKeys.add(single.contractKey);
+      }
+    }
+    if (single.diagnostics.length > 0) {
+      diagnostics.push(...single.diagnostics);
+    } else if (single.record) {
+      records.push(single.record);
+    }
+  });
+  if (diagnostics.length > 0) {
+    return {
+      valid: false,
+      version: detectedVersion,
+      diagnostics
+    };
+  }
+  return {
+    valid: true,
+    version: detectedVersion,
+    records,
+    diagnostics: []
+  };
+}
+function validateMeasurementRecords(value) {
+  const result = inspectMeasurementRecords(value);
+  if (!result.valid || !result.records) {
+    throw new MeasurementRecordValidationError(result.diagnostics);
+  }
+  return result.records;
+}
+function resolveContractIdentityKey(contract, index) {
+  const result = inspectMeasurementRecord(contract, index);
+  if (!result.valid || !result.contractKey) {
+    throw new MeasurementRecordValidationError(result.diagnostics);
+  }
+  return result.contractKey;
+}
+function validateBenchmarkComparisonCompatibility(baseFn, headFn) {
+  if (!baseFn.provenance && !headFn.provenance) {
+    return;
+  }
+  const fields = [
+    "source",
+    "source_version",
+    "protocol",
+    "helper_sha256",
+    "network_id",
+    "compute_config_sha256",
+    "seed",
+    "auth_mode",
+    "host_features"
+  ];
+  for (const field of fields) {
+    if (!baseFn.provenance || !headFn.provenance || JSON.stringify(baseFn.provenance[field]) !== JSON.stringify(headFn.provenance[field])) {
+      throw new Error(`Incompatible measurement environment: ${field}`);
+    }
+  }
+  if (JSON.stringify(baseFn.provenance?.resource_limits_sha256) !== JSON.stringify(headFn.provenance?.resource_limits_sha256)) {
+    throw new Error(
+      "Incompatible measurement environment: resource_limits_sha256"
+    );
+  }
+  if (headFn.provenance?.resource_limits_sha256) {
+    for (const metric of METRIC_KEYS) {
+      for (const field of [
+        "availability",
+        "source",
+        "limit",
+        "limit_source",
+        "limit_reason"
+      ]) {
+        if (baseFn.metrics[metric][field] !== headFn.metrics[metric][field]) {
+          throw new Error(`Incompatible metric semantics: ${metric}.${field}`);
+        }
+      }
+    }
+  }
+}
+
+// src/diff.ts
 function diffMetrics(base, head) {
   return METRIC_KEYS.map((key) => {
-    const b = base?.[key];
-    const h = head?.[key];
-    for (const value of [b, h]) {
-      if (!value)
-        throw new Error(
-          `Missing metric ${key}; use an explicit unavailable record`
-        );
-      if (value.availability !== void 0 && !["measured", "unavailable"].includes(value.availability))
-        throw new Error(`Invalid metric availability ${key}`);
-      if (value.availability === "unavailable") {
-        if (value.consumed !== null || !value.reason?.trim())
-          throw new Error(`Invalid unavailable metric ${key}`);
-      } else if (value.consumed === null || !Number.isSafeInteger(value.consumed) || value.consumed < 0) {
-        throw new Error(`Invalid measured metric ${key}`);
-      }
-      if (value.limit !== null && (!Number.isSafeInteger(value.limit) || value.limit < 0))
-        throw new Error(`Invalid metric limit ${key}`);
-    }
+    const b = base[key];
+    const h = head[key];
     if (b.consumed === null || h.consumed === null) {
       return {
         key,
@@ -35251,46 +35853,7 @@ function diffFunctions(baseFns, headFns) {
   for (const [key, headFn] of headMap) {
     const baseFn = baseMap.get(key);
     if (!baseFn) continue;
-    if (baseFn.provenance || headFn.provenance) {
-      const fields = [
-        "source",
-        "source_version",
-        "protocol",
-        "helper_sha256",
-        "network_id",
-        "compute_config_sha256",
-        "seed",
-        "auth_mode",
-        "host_features"
-      ];
-      for (const field of fields) {
-        if (!baseFn.provenance || !headFn.provenance || JSON.stringify(baseFn.provenance[field]) !== JSON.stringify(headFn.provenance[field])) {
-          throw new Error(`Incompatible measurement environment: ${field}`);
-        }
-      }
-      if (JSON.stringify(baseFn.provenance?.resource_limits_sha256) !== JSON.stringify(headFn.provenance?.resource_limits_sha256)) {
-        throw new Error(
-          "Incompatible measurement environment: resource_limits_sha256"
-        );
-      }
-      if (headFn.provenance?.resource_limits_sha256) {
-        for (const metric of METRIC_KEYS) {
-          for (const field of [
-            "availability",
-            "source",
-            "limit",
-            "limit_source",
-            "limit_reason"
-          ]) {
-            if (baseFn.metrics[metric][field] !== headFn.metrics[metric][field]) {
-              throw new Error(
-                `Incompatible metric semantics: ${metric}.${field}`
-              );
-            }
-          }
-        }
-      }
-    }
+    validateBenchmarkComparisonCompatibility(baseFn, headFn);
     const metrics = diffMetrics(baseFn.metrics, headFn.metrics);
     const hasRegression = metrics.some((m) => m.regression);
     functions.push({
@@ -35318,98 +35881,18 @@ function benchmarkIdentity(fn) {
 function benchmarkMap(functions) {
   const result = /* @__PURE__ */ new Map();
   for (const fn of functions) {
-    if (!nonblank(fn.function_name))
-      throw new Error("Benchmark function_name must not be blank");
     const key = JSON.stringify([fn.function_name, fn.case_id ?? null]);
-    if (result.has(key))
-      throw new Error(`Duplicate benchmark identity: ${key}`);
     result.set(key, fn);
   }
   return result;
 }
-function contractKey(contract) {
-  const logical = contract.schema_version !== void 0 || contract.fixture_id !== void 0 || contract.logical_id !== void 0;
-  if (!logical) {
-    if (contract.benchmarks.some((fn) => fn.case_id !== void 0)) {
-      throw new Error(
-        "Case identity requires fixture and logical contract identities"
-      );
-    }
-    return JSON.stringify(["legacy", contract.contract_id]);
-  }
-  if (![2, 3, 4].includes(contract.schema_version) || !nonblank(contract.fixture_id) || !nonblank(contract.logical_id) || contract.benchmarks.some((fn) => !nonblank(fn.case_id))) {
-    throw new Error(
-      "Version 2/3/4 results require fixture_id, logical_id, and case_id for every benchmark"
-    );
-  }
-  return JSON.stringify(["logical", contract.fixture_id, contract.logical_id]);
-}
-function nonblank(value) {
-  return typeof value === "string" && value.trim().length > 0;
-}
 function contractMap(contracts) {
+  const validated = validateMeasurementRecords(contracts);
   const result = /* @__PURE__ */ new Map();
-  for (const contract of contracts) {
-    const key = contractKey(contract);
-    if (result.has(key))
-      throw new Error(`Duplicate logical contract identity: ${key}`);
-    benchmarkMap(contract.benchmarks);
-    for (const benchmark of contract.benchmarks) {
-      diffMetrics(benchmark.metrics, benchmark.metrics);
-      if (contract.schema_version === 3 || contract.schema_version === 4) {
-        if (!benchmark.provenance)
-          throw new Error(
-            `Schema ${contract.schema_version} benchmarks require compute provenance`
-          );
-        for (const field of [
-          "source",
-          "source_version",
-          "helper_sha256",
-          "network_id",
-          "compute_config_sha256",
-          "header_sha256",
-          "snapshot_sha256",
-          "config_sha256",
-          "input_sha256",
-          "auth_mode"
-        ]) {
-          if (!nonblank(benchmark.provenance[field]))
-            throw new Error(`Invalid compute provenance: ${field}`);
-        }
-        if (!Number.isSafeInteger(benchmark.provenance.ledger) || benchmark.provenance.ledger < 0 || !Number.isSafeInteger(benchmark.provenance.protocol) || !Array.isArray(benchmark.provenance.host_features) || !benchmark.provenance.host_features.every(nonblank)) {
-          throw new Error(
-            "Invalid compute provenance: ledger/protocol/host_features"
-          );
-        }
-        if (!Array.isArray(benchmark.provenance.seed) || benchmark.provenance.seed.length !== 32 || !benchmark.provenance.seed.every(
-          (value) => Number.isInteger(value) && value >= 0 && value <= 255
-        )) {
-          throw new Error("Invalid compute provenance: seed");
-        }
-        for (const key2 of METRIC_KEYS) {
-          const value = benchmark.metrics[key2];
-          if (value.availability === void 0 || value.availability === "measured" && !nonblank(value.source)) {
-            throw new Error(
-              `Schema ${contract.schema_version} requires explicit availability and measured source for ${key2}`
-            );
-          }
-          if (contract.schema_version === 4 && value.availability === "measured") {
-            if (value.limit === null ? !nonblank(value.limit_reason) : !nonblank(value.limit_source)) {
-              throw new Error(
-                `Schema 4 requires explicit limit provenance for ${key2}`
-              );
-            }
-          }
-        }
-        if (contract.schema_version === 4 && !/^[a-f0-9]{64}$/.test(
-          benchmark.provenance.resource_limits_sha256 ?? ""
-        )) {
-          throw new Error("Schema 4 requires resource_limits_sha256");
-        }
-      }
-    }
+  validated.forEach((contract, index) => {
+    const key = resolveContractIdentityKey(contract, index);
     result.set(key, contract);
-  }
+  });
   return result;
 }
 function contractLabel(contract) {
@@ -35418,6 +35901,11 @@ function contractLabel(contract) {
 function diffBenchmarks(base, head) {
   const baseMap = contractMap(base);
   const headMap = contractMap(head);
+  if (base.length > 0 && head.length > 0 && base[0].schema_version !== void 0 && head[0].schema_version !== void 0 && base[0].schema_version !== head[0].schema_version) {
+    throw new Error(
+      "Cannot compare measurements with different schema versions"
+    );
+  }
   const newContracts = [];
   const removedContracts = [];
   const contracts = [];
@@ -35434,11 +35922,6 @@ function diffBenchmarks(base, head) {
       throw new Error(
         "Cannot compare measurements with different schema versions"
       );
-    if (headContract.schema_version === 3 && [...baseContract.benchmarks, ...headContract.benchmarks].some(
-      (fn) => !fn.provenance
-    )) {
-      throw new Error("Schema 3 benchmarks require compute provenance");
-    }
     const benchmarkDiff = diffFunctions(
       baseContract.benchmarks,
       headContract.benchmarks
@@ -51562,7 +52045,7 @@ var RpcServer = class {
       default:
         throw new TypeError(`invalid durability: ${durability}`);
     }
-    const contractKey2 = types.LedgerKey.contractData(
+    const contractKey = types.LedgerKey.contractData(
       new types.LedgerKeyContractData({
         key,
         contract: scAddress,
@@ -51570,7 +52053,7 @@ var RpcServer = class {
       })
     );
     try {
-      return await this.getLedgerEntry(contractKey2);
+      return await this.getLedgerEntry(contractKey);
     } catch {
       throw {
         code: 404,

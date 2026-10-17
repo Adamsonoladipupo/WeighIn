@@ -51,7 +51,8 @@
     "docs/fixture-migration.md",
     "docs/network-readiness.md",
     "docs/flagship-ci.md",
-    "docs/*.md"
+    "docs/*.md",
+    "docs/schemas/*.json"
   ],
   "overrides": {
     "@stellar/stellar-sdk": {
