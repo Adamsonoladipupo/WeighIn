@@ -20,8 +20,11 @@ HEAD is built and measured first. BASE defaults to the PR base branch, otherwise
 `main`, or the supplied `base-ref`. The Action fetches that ref from `origin` with
 depth 1, then creates a detached worktree at `FETCH_HEAD`. This is not a merge-base
 calculation. BASE reads its own fixture file at the same relative path and builds
-and measures its own declarations. HEAD policy governs the resulting diff. The
-BASE worktree is removed in `finally`; HEAD remains the caller's checkout.
+and measures its own declarations. HEAD policy governs the resulting diff unless
+the caller opts into `trusted-policy-ref`/`trusted-policy-path`. In that mode
+the action reads the exact resolved commit from `origin`, validates it before
+measurement, and reports its revision and content hash; HEAD cannot replace it.
+The BASE worktree is removed in `finally`; HEAD remains the caller's checkout.
 
 ## Contract build selection
 

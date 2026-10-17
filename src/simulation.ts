@@ -83,6 +83,104 @@ export interface ResourceLimits {
   events_and_return_bytes: number;
 }
 
+function sameXdr(
+  left: { toXDR(format: "raw"): Buffer } | Buffer | string,
+  right: { toXDR(format: "raw"): Buffer } | Buffer | string,
+): boolean {
+  const bytes = (value: { toXDR(format: "raw"): Buffer } | Buffer | string) =>
+    typeof value === "string"
+      ? Buffer.from(value)
+      : Buffer.isBuffer(value)
+        ? value
+        : value.toXDR("raw");
+  return bytes(left).equals(bytes(right));
+}
+
+/**
+ * Verify that a captured LedgerEntryData is the value addressed by its
+ * LedgerKey. Membership in the response is not sufficient: a substituted
+ * account, contract, code hash, config setting, or durability would otherwise
+ * be accepted as snapshot state.
+ */
+export function validateLedgerKeyEntryCorrespondence(
+  keyXdr: string,
+  dataXdr: string,
+): void {
+  const key = xdr.LedgerKey.fromXDR(keyXdr, "base64");
+  const data = xdr.LedgerEntryData.fromXDR(dataXdr, "base64");
+  const keyName = key.switch().name;
+  const dataName = data.switch().name;
+  if (keyName === "account") {
+    if (
+      dataName !== "account" ||
+      !sameXdr(key.account().accountId(), data.account().accountId())
+    )
+      throw new Error("Ledger entry/key mismatch: account identity");
+  } else if (keyName === "trustline") {
+    if (
+      dataName !== "trustline" ||
+      !sameXdr(key.trustLine().accountId(), data.trustLine().accountId()) ||
+      !sameXdr(key.trustLine().asset(), data.trustLine().asset())
+    )
+      throw new Error("Ledger entry/key mismatch: trustline identity");
+  } else if (keyName === "offer") {
+    if (
+      dataName !== "offer" ||
+      !sameXdr(key.offer().sellerId(), data.offer().sellerId()) ||
+      !sameXdr(key.offer().offerId(), data.offer().offerId())
+    )
+      throw new Error("Ledger entry/key mismatch: offer identity");
+  } else if (keyName === "data") {
+    if (
+      dataName !== "data" ||
+      !sameXdr(key.data().accountId(), data.data().accountId()) ||
+      !sameXdr(key.data().dataName(), data.data().dataName())
+    )
+      throw new Error("Ledger entry/key mismatch: data identity");
+  } else if (keyName === "claimableBalance") {
+    if (
+      dataName !== "claimableBalance" ||
+      !sameXdr(
+        key.claimableBalance().balanceId(),
+        data.claimableBalance().balanceId(),
+      )
+    )
+      throw new Error("Ledger entry/key mismatch: claimable-balance identity");
+  } else if (keyName === "contractData") {
+    if (
+      dataName !== "contractData" ||
+      !sameXdr(key.contractData().contract(), data.contractData().contract()) ||
+      !sameXdr(key.contractData().key(), data.contractData().key()) ||
+      key.contractData().durability().name !==
+        data.contractData().durability().name
+    )
+      throw new Error("Ledger entry/key mismatch: contract-data identity");
+  } else if (keyName === "contractCode") {
+    if (
+      dataName !== "contractCode" ||
+      !sameXdr(key.contractCode().hash(), data.contractCode().hash())
+    )
+      throw new Error("Ledger entry/key mismatch: contract-code hash");
+  } else if (keyName === "configSetting") {
+    if (
+      dataName !== "configSetting" ||
+      key.configSetting().configSettingId().name !==
+        data.configSetting().switch().name
+    )
+      throw new Error("Ledger entry/key mismatch: config-setting identity");
+  } else if (keyName === "ttl") {
+    if (
+      dataName !== "ttl" ||
+      !sameXdr(key.ttl().keyHash(), data.ttl().keyHash())
+    )
+      throw new Error("Ledger entry/key mismatch: TTL identity");
+  } else {
+    throw new Error(
+      `Unsupported LedgerKey variant for correspondence validation: ${keyName}`,
+    );
+  }
+}
+
 function execute(
   file: string,
   args: string[],
@@ -120,9 +218,16 @@ function execute(
                 new Error("Simulation helper execution cancelled"),
             );
           } else {
-            reject(
-              new Error(`Simulation helper failed: ${stderr || error.message}`),
-            );
+            const failure = new Error(
+              `Simulation helper failed: ${stderr || error.message}`,
+            ) as Error & { stdout?: string; exitCode?: number };
+            failure.stdout = stdout;
+            failure.exitCode =
+              typeof (error as NodeJS.ErrnoException & { code?: unknown })
+                .code === "number"
+                ? (error as NodeJS.ErrnoException & { code: number }).code
+                : undefined;
+            reject(failure);
           }
         } else resolve(stdout);
       },
@@ -131,6 +236,53 @@ function execute(
     child.stdin?.on("error", () => {});
     child.stdin?.end(input ?? "");
   });
+}
+
+interface HelperFailureEnvelope {
+  protocol_version: 1;
+  status:
+    | "uncaptured"
+    | "unsupported"
+    | "invalid_input"
+    | "incomplete"
+    | "host_failure";
+  keys?: string[];
+  message: string;
+}
+
+function parseHelperFailure(error: unknown): HelperFailureEnvelope | null {
+  const stdout = (error as { stdout?: unknown })?.stdout;
+  if (typeof stdout !== "string" || !stdout.trim()) return null;
+  try {
+    const parsed = JSON.parse(stdout) as Partial<HelperFailureEnvelope>;
+    if (
+      parsed.protocol_version !== 1 ||
+      typeof parsed.status !== "string" ||
+      typeof parsed.message !== "string"
+    ) {
+      throw new Error("invalid protocol envelope");
+    }
+    if (
+      ![
+        "uncaptured",
+        "unsupported",
+        "invalid_input",
+        "incomplete",
+        "host_failure",
+      ].includes(parsed.status)
+    )
+      throw new Error("unknown protocol status");
+    if (
+      parsed.status === "uncaptured" &&
+      (!Array.isArray(parsed.keys) || parsed.keys.length === 0)
+    )
+      throw new Error("uncaptured envelope has no keys");
+    return parsed as HelperFailureEnvelope;
+  } catch (parseError) {
+    throw new Error(
+      `Invalid native helper failure protocol: ${parseError instanceof Error ? parseError.message : parseError}`,
+    );
+  }
 }
 
 let provisioned: Promise<string> | undefined;
@@ -658,6 +810,7 @@ export async function measureInvocation(
     }
     const entries: SnapshotEntry[] = requested.map((key) => {
       const entry = rows.get(key);
+      if (entry?.xdr) validateLedgerKeyEntryCorrespondence(key, entry.xdr);
       return entry
         ? {
             key,
@@ -694,6 +847,30 @@ export async function measureInvocation(
     try {
       output = await simulateSnapshot(input, helperPath, signal);
     } catch (failure) {
+      const envelope = parseHelperFailure(failure);
+      if (envelope) {
+        if (envelope.status !== "uncaptured")
+          throw new Error(
+            `Native helper ${envelope.status}: ${envelope.message}`,
+          );
+        const additional = (envelope.keys ?? []).filter(
+          (key) => !keys.has(key),
+        );
+        if (!additional.length)
+          throw new Error("Native helper reported no new captured keys");
+        for (const key of additional) {
+          try {
+            xdr.LedgerKey.fromXDR(key, "base64");
+          } catch {
+            throw new Error("Native helper reported malformed LedgerKey");
+          }
+          keys.add(key);
+        }
+        lastCause = "newly_discovered_keys";
+        causes.newly_discovered_keys++;
+        discoveredKeysCount += additional.length;
+        continue;
+      }
       const message =
         failure instanceof Error ? failure.message : String(failure);
       const missing = [

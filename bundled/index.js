@@ -202,8 +202,8 @@ var require_file_command = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.issueFileCommand = issueFileCommand;
     exports2.prepareKeyValueMessage = prepareKeyValueMessage;
-    var crypto4 = __importStar(require("crypto"));
-    var fs7 = __importStar(require("fs"));
+    var crypto5 = __importStar(require("crypto"));
+    var fs6 = __importStar(require("fs"));
     var os3 = __importStar(require("os"));
     var utils_1 = require_utils();
     function issueFileCommand(command, message) {
@@ -211,15 +211,15 @@ var require_file_command = __commonJS({
       if (!filePath) {
         throw new Error(`Unable to find environment variable for file command ${command}`);
       }
-      if (!fs7.existsSync(filePath)) {
+      if (!fs6.existsSync(filePath)) {
         throw new Error(`Missing file at path: ${filePath}`);
       }
-      fs7.appendFileSync(filePath, `${(0, utils_1.toCommandValue)(message)}${os3.EOL}`, {
+      fs6.appendFileSync(filePath, `${(0, utils_1.toCommandValue)(message)}${os3.EOL}`, {
         encoding: "utf8"
       });
     }
     function prepareKeyValueMessage(key, value) {
-      const delimiter = `ghadelimiter_${crypto4.randomUUID()}`;
+      const delimiter = `ghadelimiter_${crypto5.randomUUID()}`;
       const convertedValue = (0, utils_1.toCommandValue)(value);
       if (key.includes(delimiter)) {
         throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
@@ -4301,11 +4301,11 @@ var require_util2 = __commonJS({
     var { isUint8Array } = require("node:util/types");
     var { webidl } = require_webidl();
     var supportedHashes = [];
-    var crypto4;
+    var crypto5;
     try {
-      crypto4 = require("node:crypto");
+      crypto5 = require("node:crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto4.getHashes().filter((hash2) => possibleRelevantHashes.includes(hash2));
+      supportedHashes = crypto5.getHashes().filter((hash2) => possibleRelevantHashes.includes(hash2));
     } catch {
     }
     function responseURL(response) {
@@ -4578,7 +4578,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto4 === void 0) {
+      if (crypto5 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -4593,7 +4593,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto4.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto5.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -5657,8 +5657,8 @@ var require_body = __commonJS({
     var { multipartFormDataParser } = require_formdata_parser();
     var random;
     try {
-      const crypto4 = require("node:crypto");
-      random = (max) => crypto4.randomInt(0, max);
+      const crypto5 = require("node:crypto");
+      random = (max) => crypto5.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -17256,13 +17256,13 @@ var require_frame = __commonJS({
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
     var BUFFER_SIZE = 16386;
-    var crypto4;
+    var crypto5;
     var buffer = null;
     var bufIdx = BUFFER_SIZE;
     try {
-      crypto4 = require("node:crypto");
+      crypto5 = require("node:crypto");
     } catch {
-      crypto4 = {
+      crypto5 = {
         // not full compatibility, but minimum.
         randomFillSync: function randomFillSync(buffer2, _offset, _size) {
           for (let i = 0; i < buffer2.length; ++i) {
@@ -17275,7 +17275,7 @@ var require_frame = __commonJS({
     function generateMask() {
       if (bufIdx === BUFFER_SIZE) {
         bufIdx = 0;
-        crypto4.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
+        crypto5.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
       }
       return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]];
     }
@@ -17347,9 +17347,9 @@ var require_connection = __commonJS({
     var { Headers: Headers2, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
-    var crypto4;
+    var crypto5;
     try {
-      crypto4 = require("node:crypto");
+      crypto5 = require("node:crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, client, ws, onEstablish, options) {
@@ -17369,7 +17369,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers2(options.headers));
         request3.headersList = headersList;
       }
-      const keyValue = crypto4.randomBytes(16).toString("base64");
+      const keyValue = crypto5.randomBytes(16).toString("base64");
       request3.headersList.append("sec-websocket-key", keyValue);
       request3.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -17399,7 +17399,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto4.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto5.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -20546,12 +20546,12 @@ var require_io_util = __commonJS({
     var _a2;
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.getCmdPath = exports2.tryGetExecutablePath = exports2.isRooted = exports2.isDirectory = exports2.exists = exports2.READONLY = exports2.UV_FS_O_EXLOCK = exports2.IS_WINDOWS = exports2.unlink = exports2.symlink = exports2.stat = exports2.rmdir = exports2.rm = exports2.rename = exports2.readlink = exports2.readdir = exports2.open = exports2.mkdir = exports2.lstat = exports2.copyFile = exports2.chmod = void 0;
-    var fs7 = __importStar(require("fs"));
+    var fs6 = __importStar(require("fs"));
     var path7 = __importStar(require("path"));
-    _a2 = fs7.promises, exports2.chmod = _a2.chmod, exports2.copyFile = _a2.copyFile, exports2.lstat = _a2.lstat, exports2.mkdir = _a2.mkdir, exports2.open = _a2.open, exports2.readdir = _a2.readdir, exports2.readlink = _a2.readlink, exports2.rename = _a2.rename, exports2.rm = _a2.rm, exports2.rmdir = _a2.rmdir, exports2.stat = _a2.stat, exports2.symlink = _a2.symlink, exports2.unlink = _a2.unlink;
+    _a2 = fs6.promises, exports2.chmod = _a2.chmod, exports2.copyFile = _a2.copyFile, exports2.lstat = _a2.lstat, exports2.mkdir = _a2.mkdir, exports2.open = _a2.open, exports2.readdir = _a2.readdir, exports2.readlink = _a2.readlink, exports2.rename = _a2.rename, exports2.rm = _a2.rm, exports2.rmdir = _a2.rmdir, exports2.stat = _a2.stat, exports2.symlink = _a2.symlink, exports2.unlink = _a2.unlink;
     exports2.IS_WINDOWS = process.platform === "win32";
     exports2.UV_FS_O_EXLOCK = 268435456;
-    exports2.READONLY = fs7.constants.O_RDONLY;
+    exports2.READONLY = fs6.constants.O_RDONLY;
     function exists(fsPath) {
       return __awaiter2(this, void 0, void 0, function* () {
         try {
@@ -31115,7 +31115,7 @@ var require_toml = __commonJS({
 var core3 = __toESM(require_core());
 var exec5 = __toESM(require_exec());
 init_github();
-var fs6 = __toESM(require("fs"));
+var fs5 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
 var os2 = __toESM(require("os"));
 
@@ -53183,6 +53183,51 @@ var outputSchema = external_exports.object({
   contract_events_xdr: external_exports.array(encoded),
   modified_entries: integer
 }).strict();
+function sameXdr(left, right) {
+  const bytes = (value) => typeof value === "string" ? Buffer.from(value) : Buffer.isBuffer(value) ? value : value.toXDR("raw");
+  return bytes(left).equals(bytes(right));
+}
+function validateLedgerKeyEntryCorrespondence(keyXdr, dataXdr) {
+  const key = types.LedgerKey.fromXDR(keyXdr, "base64");
+  const data = types.LedgerEntryData.fromXDR(dataXdr, "base64");
+  const keyName = key.switch().name;
+  const dataName = data.switch().name;
+  if (keyName === "account") {
+    if (dataName !== "account" || !sameXdr(key.account().accountId(), data.account().accountId()))
+      throw new Error("Ledger entry/key mismatch: account identity");
+  } else if (keyName === "trustline") {
+    if (dataName !== "trustline" || !sameXdr(key.trustLine().accountId(), data.trustLine().accountId()) || !sameXdr(key.trustLine().asset(), data.trustLine().asset()))
+      throw new Error("Ledger entry/key mismatch: trustline identity");
+  } else if (keyName === "offer") {
+    if (dataName !== "offer" || !sameXdr(key.offer().sellerId(), data.offer().sellerId()) || !sameXdr(key.offer().offerId(), data.offer().offerId()))
+      throw new Error("Ledger entry/key mismatch: offer identity");
+  } else if (keyName === "data") {
+    if (dataName !== "data" || !sameXdr(key.data().accountId(), data.data().accountId()) || !sameXdr(key.data().dataName(), data.data().dataName()))
+      throw new Error("Ledger entry/key mismatch: data identity");
+  } else if (keyName === "claimableBalance") {
+    if (dataName !== "claimableBalance" || !sameXdr(
+      key.claimableBalance().balanceId(),
+      data.claimableBalance().balanceId()
+    ))
+      throw new Error("Ledger entry/key mismatch: claimable-balance identity");
+  } else if (keyName === "contractData") {
+    if (dataName !== "contractData" || !sameXdr(key.contractData().contract(), data.contractData().contract()) || !sameXdr(key.contractData().key(), data.contractData().key()) || key.contractData().durability().name !== data.contractData().durability().name)
+      throw new Error("Ledger entry/key mismatch: contract-data identity");
+  } else if (keyName === "contractCode") {
+    if (dataName !== "contractCode" || !sameXdr(key.contractCode().hash(), data.contractCode().hash()))
+      throw new Error("Ledger entry/key mismatch: contract-code hash");
+  } else if (keyName === "configSetting") {
+    if (dataName !== "configSetting" || key.configSetting().configSettingId().name !== data.configSetting().switch().name)
+      throw new Error("Ledger entry/key mismatch: config-setting identity");
+  } else if (keyName === "ttl") {
+    if (dataName !== "ttl" || !sameXdr(key.ttl().keyHash(), data.ttl().keyHash()))
+      throw new Error("Ledger entry/key mismatch: TTL identity");
+  } else {
+    throw new Error(
+      `Unsupported LedgerKey variant for correspondence validation: ${keyName}`
+    );
+  }
+}
 function execute(file, args, input, cwd, signal) {
   return new Promise((resolve6, reject) => {
     if (signal?.aborted) {
@@ -53210,9 +53255,12 @@ function execute(file, args, input, cwd, signal) {
               signal?.reason || new Error("Simulation helper execution cancelled")
             );
           } else {
-            reject(
-              new Error(`Simulation helper failed: ${stderr || error2.message}`)
+            const failure = new Error(
+              `Simulation helper failed: ${stderr || error2.message}`
             );
+            failure.stdout = stdout;
+            failure.exitCode = typeof error2.code === "number" ? error2.code : void 0;
+            reject(failure);
           }
         } else resolve6(stdout);
       }
@@ -53221,6 +53269,31 @@ function execute(file, args, input, cwd, signal) {
     });
     child.stdin?.end(input ?? "");
   });
+}
+function parseHelperFailure(error2) {
+  const stdout = error2?.stdout;
+  if (typeof stdout !== "string" || !stdout.trim()) return null;
+  try {
+    const parsed = JSON.parse(stdout);
+    if (parsed.protocol_version !== 1 || typeof parsed.status !== "string" || typeof parsed.message !== "string") {
+      throw new Error("invalid protocol envelope");
+    }
+    if (![
+      "uncaptured",
+      "unsupported",
+      "invalid_input",
+      "incomplete",
+      "host_failure"
+    ].includes(parsed.status))
+      throw new Error("unknown protocol status");
+    if (parsed.status === "uncaptured" && (!Array.isArray(parsed.keys) || parsed.keys.length === 0))
+      throw new Error("uncaptured envelope has no keys");
+    return parsed;
+  } catch (parseError) {
+    throw new Error(
+      `Invalid native helper failure protocol: ${parseError instanceof Error ? parseError.message : parseError}`
+    );
+  }
 }
 var provisioned;
 async function resolveSimulationHelper(explicitPath, customBuild) {
@@ -53587,6 +53660,7 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
     }
     const entries = requested.map((key) => {
       const entry = rows.get(key);
+      if (entry?.xdr) validateLedgerKeyEntryCorrespondence(key, entry.xdr);
       return entry ? {
         key,
         xdr: entry.xdr,
@@ -53612,6 +53686,30 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
     try {
       output = await simulateSnapshot(input, helperPath, signal);
     } catch (failure) {
+      const envelope = parseHelperFailure(failure);
+      if (envelope) {
+        if (envelope.status !== "uncaptured")
+          throw new Error(
+            `Native helper ${envelope.status}: ${envelope.message}`
+          );
+        const additional2 = (envelope.keys ?? []).filter(
+          (key) => !keys.has(key)
+        );
+        if (!additional2.length)
+          throw new Error("Native helper reported no new captured keys");
+        for (const key of additional2) {
+          try {
+            types.LedgerKey.fromXDR(key, "base64");
+          } catch {
+            throw new Error("Native helper reported malformed LedgerKey");
+          }
+          keys.add(key);
+        }
+        lastCause = "newly_discovered_keys";
+        causes.newly_discovered_keys++;
+        discoveredKeysCount += additional2.length;
+        continue;
+      }
       const message = failure instanceof Error ? failure.message : String(failure);
       const missing = [
         ...message.matchAll(/UNCAPTURED_KEY:([A-Za-z0-9+/=]+)/g)
@@ -54186,8 +54284,8 @@ Build the contract before running measurements.`
 }
 
 // src/threshold.ts
-var fs3 = __toESM(require("fs"));
 var TOML = __toESM(require_toml());
+var crypto4 = __toESM(require("crypto"));
 var percentage = external_exports.number().finite().nonnegative();
 var ruleSchema = external_exports.union([
   percentage,
@@ -54219,18 +54317,17 @@ function validateConfig(value) {
     throw new Error(formatZodError(parsed.error, "weighin.toml"));
   return parsed.data;
 }
-function loadConfig(configPath) {
-  if (!fs3.existsSync(configPath)) {
-    return null;
-  }
-  const raw = fs3.readFileSync(configPath, "utf8");
+function loadConfigContent(content, sourcePath) {
   try {
-    return validateConfig(TOML.parse(raw));
+    return validateConfig(TOML.parse(content));
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("Invalid WeighIn configuration"))
       throw error2;
-    throw new Error(`Failed to parse TOML in ${configPath}: ${error2.message}`);
+    throw new Error(`Failed to parse TOML in ${sourcePath}: ${error2.message}`);
   }
+}
+function policyContentSha256(content) {
+  return crypto4.createHash("sha256").update(content, "utf8").digest("hex");
 }
 function parseAllowPct(rule) {
   const m = rule.match(/^allow_(\d+(?:\.\d+)?)_percent_increase$/);
@@ -54507,13 +54604,19 @@ function compareFunctions(a, b) {
 function compareViolations(a, b) {
   return compareCodePoints(a.fixture_id, b.fixture_id) || compareCodePoints(a.logical_id, b.logical_id) || compareCodePoints(a.contract_id, b.contract_id) || compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id) || compareCodePoints(a.metric, b.metric);
 }
-function renderComment(diff, violations, baseRef, headSha) {
+function renderComment(diff, violations, baseRef, headSha, policyOrigin) {
   const lines = [];
   const sortedViolations = [...violations].sort(compareViolations);
   const statusEmoji = sortedViolations.length > 0 ? "\u{1F534}" : "\u{1F7E2}";
   const statusText = sortedViolations.length > 0 ? `**${sortedViolations.length} threshold violation${sortedViolations.length > 1 ? "s" : ""}**` : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
+  if (policyOrigin) {
+    lines.push(
+      `Policy source: **${policyOrigin.mode}** \`${policyOrigin.path}\` at \`${policyOrigin.revision}\`; content SHA256 \`${policyOrigin.content_sha256}\`.`
+    );
+    lines.push("");
+  }
   lines.push(
     `${statusText} \u2014 comparing \`${baseRef}\` \u2192 \`${headSha.slice(0, 8)}\``
   );
@@ -54607,7 +54710,7 @@ var core = __toESM(require_core());
 var exec3 = __toESM(require_exec());
 
 // src/build.ts
-var fs4 = __toESM(require("fs"));
+var fs3 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 var os = __toESM(require("os"));
 var import_crypto = require("crypto");
@@ -54617,12 +54720,12 @@ function verifyBuildStorage(directory, bytes = 1024 * 1024) {
   const expected = Buffer.alloc(bytes, 165);
   let descriptor;
   try {
-    descriptor = fs4.openSync(probePath, "wx", 384);
-    fs4.writeFileSync(descriptor, expected);
-    fs4.fsyncSync(descriptor);
-    fs4.closeSync(descriptor);
+    descriptor = fs3.openSync(probePath, "wx", 384);
+    fs3.writeFileSync(descriptor, expected);
+    fs3.fsyncSync(descriptor);
+    fs3.closeSync(descriptor);
     descriptor = void 0;
-    if (!fs4.readFileSync(probePath).equals(expected))
+    if (!fs3.readFileSync(probePath).equals(expected))
       throw new Error(
         "temporary-file contents did not survive a write/read round trip"
       );
@@ -54631,13 +54734,13 @@ function verifyBuildStorage(directory, bytes = 1024 * 1024) {
       `Build temporary storage is unusable at ${directory}: ${error2.message}. Provide healthy temporary storage (TMPDIR on Unix); refusing to accept optimizer output.`
     );
   } finally {
-    if (descriptor !== void 0) fs4.closeSync(descriptor);
-    fs4.rmSync(probePath, { force: true });
+    if (descriptor !== void 0) fs3.closeSync(descriptor);
+    fs3.rmSync(probePath, { force: true });
   }
 }
 async function buildContracts(fixturesPath, rustToolchain) {
   const fixtures = parseFixtures(
-    fs4.readFileSync(fixturesPath, "utf8"),
+    fs3.readFileSync(fixturesPath, "utf8"),
     path4.basename(fixturesPath)
   );
   const fixturesDir = path4.dirname(path4.resolve(fixturesPath));
@@ -54693,7 +54796,7 @@ async function buildContracts(fixturesPath, rustToolchain) {
   for (const contract of fixtures.contracts) {
     const destination = path4.resolve(fixturesDir, contract.wasm_path);
     let dir = path4.dirname(destination);
-    while (!fs4.existsSync(path4.join(dir, "Cargo.toml"))) {
+    while (!fs3.existsSync(path4.join(dir, "Cargo.toml"))) {
       const parent = path4.dirname(dir);
       if (parent === dir)
         throw new Error(
@@ -54740,7 +54843,7 @@ async function buildContracts(fixturesPath, rustToolchain) {
     if (!wasm) {
       let outputDir;
       try {
-        outputDir = fs4.mkdtempSync(path4.join(os.tmpdir(), "weighin-build-"));
+        outputDir = fs3.mkdtempSync(path4.join(os.tmpdir(), "weighin-build-"));
       } catch (error2) {
         throw new Error(
           `Cannot create build temporary storage: ${error2.message}`
@@ -54765,7 +54868,7 @@ async function buildContracts(fixturesPath, rustToolchain) {
           path4.dirname(pkg.manifest_path),
           { ...env, TMPDIR: outputDir, TMP: outputDir, TEMP: outputDir }
         );
-        wasm = fs4.readFileSync(
+        wasm = fs3.readFileSync(
           path4.join(outputDir, `${pkg.name.replace(/-/g, "_")}.wasm`)
         );
         verifyBuildStorage(outputDir, Math.max(1024 * 1024, wasm.length));
@@ -54773,11 +54876,11 @@ async function buildContracts(fixturesPath, rustToolchain) {
           throw new Error("Stellar build did not produce a valid WASM module");
         artifacts.set(pkg.manifest_path, wasm);
       } finally {
-        fs4.rmSync(outputDir, { recursive: true, force: true });
+        fs3.rmSync(outputDir, { recursive: true, force: true });
       }
     }
-    fs4.mkdirSync(path4.dirname(destination), { recursive: true });
-    fs4.writeFileSync(destination, wasm);
+    fs3.mkdirSync(path4.dirname(destination), { recursive: true });
+    fs3.writeFileSync(destination, wasm);
     const record = {
       wasm_path: destination,
       manifest_path: pkg.manifest_path,
@@ -54823,7 +54926,7 @@ async function buildForRevision(fixturesPath, worktreeRoot, rustToolchain, build
 }
 
 // src/report.ts
-var fs5 = __toESM(require("fs"));
+var fs4 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
 var core2 = __toESM(require_core());
 function writeReportFile(reportPathInput, headWorkspace, body) {
@@ -54831,10 +54934,10 @@ function writeReportFile(reportPathInput, headWorkspace, body) {
   const targetPath = path5.resolve(headWorkspace, reportPathInput);
   try {
     const parentDir = path5.dirname(targetPath);
-    if (!fs5.existsSync(parentDir)) {
-      fs5.mkdirSync(parentDir, { recursive: true });
+    if (!fs4.existsSync(parentDir)) {
+      fs4.mkdirSync(parentDir, { recursive: true });
     }
-    fs5.writeFileSync(targetPath, body, "utf8");
+    fs4.writeFileSync(targetPath, body, "utf8");
     core2.info(`Wrote Markdown report to ${targetPath}`);
   } catch (err) {
     throw new Error(
@@ -54930,6 +55033,63 @@ async function capture(cmd, args, cwd) {
   });
   return out.trim();
 }
+async function captureRaw(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    silent: true,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    }
+  });
+  return out;
+}
+async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
+  if (!trustedRef && !trustedPath) {
+    const configPath = path6.resolve(repoDir, configPathRel || "weighin.toml");
+    const content2 = fs5.existsSync(configPath) ? fs5.readFileSync(configPath, "utf8") : "";
+    return {
+      config: content2 ? loadConfigContent(content2, configPath) : null,
+      origin: {
+        mode: "head",
+        path: path6.relative(repoDir, configPath),
+        revision: await getHeadSha(repoDir),
+        content_sha256: policyContentSha256(content2)
+      }
+    };
+  }
+  if (!trustedRef || !trustedPath)
+    throw new Error(
+      "trusted-policy-ref and trusted-policy-path must be supplied together"
+    );
+  const fetched = await capture(
+    "git",
+    ["fetch", "--depth=1", "origin", trustedRef],
+    repoDir
+  );
+  void fetched;
+  const revision = await capture("git", ["rev-parse", "FETCH_HEAD"], repoDir);
+  const content = await captureRaw(
+    "git",
+    ["show", `${revision}:${trustedPath}`],
+    repoDir
+  );
+  if (!content.trim())
+    throw new Error(
+      `Trusted policy is missing or empty: ${trustedPath} at ${revision}`
+    );
+  return {
+    config: loadConfigContent(content, `${revision}:${trustedPath}`),
+    origin: {
+      mode: "trusted",
+      path: trustedPath,
+      revision,
+      content_sha256: policyContentSha256(content)
+    }
+  };
+}
 async function getHeadSha(dir) {
   try {
     return await capture("git", ["rev-parse", "HEAD"], dir);
@@ -54941,8 +55101,8 @@ function getSdkVersion(repoDir) {
   for (const rel of ["Cargo.lock", "contract/Cargo.lock"]) {
     const lockPath = path6.join(repoDir, rel);
     try {
-      if (fs6.existsSync(lockPath)) {
-        const lock = fs6.readFileSync(lockPath, "utf8");
+      if (fs5.existsSync(lockPath)) {
+        const lock = fs5.readFileSync(lockPath, "utf8");
         const m = lock.match(/name = "soroban-sdk"\nversion = "([^"]+)"/);
         if (m) return m[1];
       }
@@ -54955,7 +55115,7 @@ async function checkoutRef(repoRoot, ref, label) {
   await exec5.exec("git", ["fetch", "--depth=1", "origin", ref], {
     cwd: repoRoot
   });
-  const dir = fs6.mkdtempSync(path6.join(os2.tmpdir(), `weighin-${label}-`));
+  const dir = fs5.mkdtempSync(path6.join(os2.tmpdir(), `weighin-${label}-`));
   core3.info(`Checking out ${ref} into ${dir}`);
   try {
     await exec5.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
@@ -55019,6 +55179,8 @@ async function run() {
   try {
     const fixturesPathRel = core3.getInput("fixtures-path", { required: true });
     const configPathRel = core3.getInput("config-path");
+    const trustedPolicyRef = core3.getInput("trusted-policy-ref").trim();
+    const trustedPolicyPath = core3.getInput("trusted-policy-path").trim();
     const rpcUrl = core3.getInput("rpc-url") || "http://localhost:8000/rpc";
     configuredRpcUrl = rpcUrl;
     const githubToken = core3.getInput("github-token");
@@ -55033,8 +55195,8 @@ async function run() {
     }
     const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
     const baseRef = baseRefInput || context2.payload.pull_request?.base?.ref || "main";
-    keyDir = fs6.mkdtempSync(path6.join(os2.tmpdir(), "weighin-key-"));
-    fs6.chmodSync(keyDir, 448);
+    keyDir = fs5.mkdtempSync(path6.join(os2.tmpdir(), "weighin-key-"));
+    fs5.chmodSync(keyDir, 448);
     sharedKeyFile = path6.join(keyDir, "weighin-deployer.key");
     core3.info(`Base ref:   ${baseRef}`);
     core3.info(`RPC URL:    ${sanitizeEndpoint(rpcUrl)}`);
@@ -55043,12 +55205,14 @@ async function run() {
     await assertRpcHealthy(rpcUrl);
     const headFixturesPath = path6.resolve(headWorkspace, fixturesPathRel);
     const fixtureId = path6.relative(headWorkspace, headFixturesPath);
-    const configPath = path6.resolve(
+    const policy = await loadPolicy(
       headWorkspace,
-      configPathRel || "weighin.toml"
+      configPathRel,
+      trustedPolicyRef,
+      trustedPolicyPath
     );
-    const config2 = loadConfig(configPath);
-    if (!fs6.existsSync(headFixturesPath)) {
+    const config2 = policy.config;
+    if (!fs5.existsSync(headFixturesPath)) {
       throw new Error(`fixtures-path not found: ${headFixturesPath}`);
     }
     core3.startGroup("Building + measuring HEAD");
@@ -55092,7 +55256,7 @@ async function run() {
       baseDir = checkout.dir;
       baseSha = checkout.sha;
       const baseFixturesPath = path6.resolve(baseDir, fixturesPathRel);
-      if (!fs6.existsSync(baseFixturesPath)) {
+      if (!fs5.existsSync(baseFixturesPath)) {
         throw new Error("fixtures-path not found in base ref");
       } else {
         await buildForRevision(
@@ -55156,7 +55320,13 @@ async function run() {
     const result = violations.length > 0 ? "fail" : "pass";
     core3.setOutput("result", result);
     core3.setOutput("diff-json", JSON.stringify(diff));
-    const body = renderComment(diff, violations, baseRef, headSha);
+    const body = renderComment(
+      diff,
+      violations,
+      baseRef,
+      headSha,
+      policy.origin
+    );
     if (process.env.GITHUB_STEP_SUMMARY)
       await core3.summary.addRaw(body).write();
     if (reportPathInput) writeReportFile(reportPathInput, headWorkspace, body);
@@ -55164,10 +55334,10 @@ async function run() {
       const prNumber = context2.payload.pull_request?.number;
       if (prNumber) {
         const destination = path6.resolve(headWorkspace, metadataPathInput);
-        fs6.mkdirSync(path6.dirname(destination), { recursive: true });
+        fs5.mkdirSync(path6.dirname(destination), { recursive: true });
         const { owner, repo } = context2.repo;
         const metadata = buildPrMetadata(`${owner}/${repo}`, prNumber, headSha);
-        fs6.writeFileSync(
+        fs5.writeFileSync(
           destination,
           JSON.stringify(metadata, null, 2),
           "utf8"
@@ -55189,7 +55359,7 @@ async function run() {
   } finally {
     if (keyDir) {
       try {
-        fs6.rmSync(keyDir, { recursive: true, force: true });
+        fs5.rmSync(keyDir, { recursive: true, force: true });
         core3.info(`Removed owned deployer key directory: ${keyDir}`);
       } catch (err) {
         core3.warning(

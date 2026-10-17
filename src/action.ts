@@ -7,7 +7,14 @@ import * as os from "os";
 
 import { runMeasurement, ContractBenchmark } from "./measurement";
 import { diffBenchmarks, DiffResult, contractLabel } from "./diff";
-import { loadConfig, enforceThresholds, Violation } from "./threshold";
+import {
+  loadConfig,
+  loadConfigContent,
+  policyContentSha256,
+  enforceThresholds,
+  Violation,
+  PolicyOrigin,
+} from "./threshold";
 import { renderComment } from "./comment";
 import { buildForRevision, parseOptionalBooleanInput } from "./build-selection";
 import { writeReportFile, generateFailureReport } from "./report";
@@ -93,6 +100,76 @@ async function capture(
     silent: true,
   });
   return out.trim();
+}
+
+async function captureRaw(
+  cmd: string,
+  args: string[],
+  cwd?: string,
+): Promise<string> {
+  let out = "";
+  await exec.exec(cmd, args, {
+    cwd,
+    silent: true,
+    listeners: {
+      stdout: (d: Buffer) => {
+        out += d.toString();
+      },
+    },
+  });
+  return out;
+}
+
+async function loadPolicy(
+  repoDir: string,
+  configPathRel: string,
+  trustedRef: string,
+  trustedPath: string,
+): Promise<{ config: ReturnType<typeof loadConfig>; origin: PolicyOrigin }> {
+  if (!trustedRef && !trustedPath) {
+    const configPath = path.resolve(repoDir, configPathRel || "weighin.toml");
+    const content = fs.existsSync(configPath)
+      ? fs.readFileSync(configPath, "utf8")
+      : "";
+    return {
+      config: content ? loadConfigContent(content, configPath) : null,
+      origin: {
+        mode: "head",
+        path: path.relative(repoDir, configPath),
+        revision: await getHeadSha(repoDir),
+        content_sha256: policyContentSha256(content),
+      },
+    };
+  }
+  if (!trustedRef || !trustedPath)
+    throw new Error(
+      "trusted-policy-ref and trusted-policy-path must be supplied together",
+    );
+  const fetched = await capture(
+    "git",
+    ["fetch", "--depth=1", "origin", trustedRef],
+    repoDir,
+  );
+  void fetched;
+  const revision = await capture("git", ["rev-parse", "FETCH_HEAD"], repoDir);
+  const content = await captureRaw(
+    "git",
+    ["show", `${revision}:${trustedPath}`],
+    repoDir,
+  );
+  if (!content.trim())
+    throw new Error(
+      `Trusted policy is missing or empty: ${trustedPath} at ${revision}`,
+    );
+  return {
+    config: loadConfigContent(content, `${revision}:${trustedPath}`),
+    origin: {
+      mode: "trusted",
+      path: trustedPath,
+      revision,
+      content_sha256: policyContentSha256(content),
+    },
+  };
 }
 
 /** Get HEAD SHA in the given directory. */
@@ -227,6 +304,8 @@ async function run(): Promise<void> {
   try {
     const fixturesPathRel = core.getInput("fixtures-path", { required: true });
     const configPathRel = core.getInput("config-path");
+    const trustedPolicyRef = core.getInput("trusted-policy-ref").trim();
+    const trustedPolicyPath = core.getInput("trusted-policy-path").trim();
     const rpcUrl = core.getInput("rpc-url") || "http://localhost:8000/rpc";
     configuredRpcUrl = rpcUrl;
     const githubToken = core.getInput("github-token");
@@ -262,11 +341,13 @@ async function run(): Promise<void> {
     // 2. Resolve paths from the HEAD workspace (fixtures, config live there)
     const headFixturesPath = path.resolve(headWorkspace, fixturesPathRel);
     const fixtureId = path.relative(headWorkspace, headFixturesPath);
-    const configPath = path.resolve(
+    const policy = await loadPolicy(
       headWorkspace,
-      configPathRel || "weighin.toml",
+      configPathRel,
+      trustedPolicyRef,
+      trustedPolicyPath,
     );
-    const config = loadConfig(configPath);
+    const config = policy.config;
 
     if (!fs.existsSync(headFixturesPath)) {
       throw new Error(`fixtures-path not found: ${headFixturesPath}`);
@@ -397,7 +478,13 @@ async function run(): Promise<void> {
     core.setOutput("diff-json", JSON.stringify(diff));
 
     // Report is available in the job summary even without permission to post a PR comment.
-    const body = renderComment(diff, violations, baseRef, headSha);
+    const body = renderComment(
+      diff,
+      violations,
+      baseRef,
+      headSha,
+      policy.origin,
+    );
     if (process.env.GITHUB_STEP_SUMMARY)
       await core.summary.addRaw(body).write();
     if (reportPathInput) writeReportFile(reportPathInput, headWorkspace, body);
