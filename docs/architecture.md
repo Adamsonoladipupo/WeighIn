@@ -123,12 +123,17 @@ records environment differences; it does not freeze state across the suite.
 
 ## Diff and policy
 
-`src/diff.ts::diffBenchmarks` validates all records, including unmatched ones.
-Contracts pair by fixture/logical identity, invocations by function/case identity.
-It requires equal schemas and compatible compute/resource/source semantics.
-Ledger/full-config metadata can change while comparable calibration/caps remain
-constant. Mixed historical/current schemas fail explicitly; legacy records only
-retain their legacy runtime-address matching against other legacy records.
+`src/record-schema.ts` provides the authoritative versioned schema and standalone
+runtime validator (`validateMeasurementRecord`, `validateMeasurementRecords`,
+`inspectMeasurementRecords`, and `getMeasurementRecordJsonSchema`) for saved
+measurement envelopes (`legacy`, `2`, `3`, and `4`; see
+[record schema](record-schema.md)). `src/diff.ts::diffBenchmarks` delegates record
+validation to `src/record-schema.ts`, validating all records including unmatched
+ones. Contracts pair by fixture/logical identity, invocations by function/case
+identity. It requires equal schemas and compatible compute/resource/source
+semantics. Ledger/full-config metadata can change while comparable calibration/caps
+remain constant. Mixed historical/current schemas fail explicitly; legacy records
+only retain their legacy runtime-address matching against other legacy records.
 
 Comparable deltas are HEAD minus BASE. Positive values mark regressions;
 negative values mark improvements. A zero baseline has null percentage, not an
