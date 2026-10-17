@@ -156,6 +156,8 @@ All supported inputs are declared in [action.yml](action.yml):
 |---|---|
 | `fixtures-path` | Required fixture path; default `weighin-fixtures.json` |
 | `config-path` | HEAD policy file; default `weighin.toml`. A missing file means report-only |
+| `trusted-policy-ref` | Optional ref fetched from `origin` for an immutable policy source; must be paired with `trusted-policy-path` |
+| `trusted-policy-path` | Repository path read from the resolved trusted policy commit; HEAD cannot replace it |
 | `rpc-url` | Compatible standalone RPC; default `http://localhost:8000/rpc` |
 | `base-ref` | Fetched baseline ref; PR base branch, otherwise `main`, if omitted |
 | `rust-toolchain` | Contract-build Rustup override; does not change pinned native-helper toolchain |
@@ -168,6 +170,10 @@ All supported inputs are declared in [action.yml](action.yml):
 Outputs: `result` is `pass` or `fail`; `diff-json` contains the comparison.
 An unsuccessful comparison emits `fail` and `{}`. A valid comparison with policy
 violations emits its real diff, writes the report, then fails the Action.
+
+See [policy and package provenance](docs/policy-and-package-provenance.md) for
+the trusted-policy boundary, package manifest verification, and signing
+guidance.
 
 ### Endpoint diagnostics
 

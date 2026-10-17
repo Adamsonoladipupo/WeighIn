@@ -8,6 +8,7 @@ import {
   contractLabel,
 } from "./diff";
 import { Violation } from "./threshold";
+import { PolicyOrigin } from "./threshold";
 
 export const COMMENT_MARKER = "<!-- weighin-report -->";
 
@@ -231,6 +232,7 @@ export function renderComment(
   violations: Violation[],
   baseRef: string,
   headSha: string,
+  policyOrigin?: PolicyOrigin,
 ): string {
   const lines: string[] = [];
 
@@ -245,6 +247,12 @@ export function renderComment(
       : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
+  if (policyOrigin) {
+    lines.push(
+      `Policy source: **${policyOrigin.mode}** \`${policyOrigin.path}\` at \`${policyOrigin.revision}\`; content SHA256 \`${policyOrigin.content_sha256}\`.`,
+    );
+    lines.push("");
+  }
   lines.push(
     `${statusText} — comparing \`${baseRef}\` → \`${headSha.slice(0, 8)}\``,
   );
