@@ -45,11 +45,16 @@ async function scenario(options, verify) {
     const emit = text => config.listeners.stdout(Buffer.from(text));
     if (command === 'rustc') emit(options.rust || 'rustc 1.95.0');
     else if (command === 'cargo') {
-      const manifestIndex = args.indexOf('--manifest-path');
-      const manifestArg = manifestIndex !== -1 ? args[manifestIndex + 1] : null;
-      const relevantPackages = packages.filter(p => !manifestArg || p.manifest_path === manifestArg || path.dirname(p.manifest_path) === path.dirname(manifestArg));
-      const selected = relevantPackages.length > 0 ? relevantPackages : packages;
-      emit(JSON.stringify({ workspace_members: selected.map(pkg => pkg.id), packages: selected }));
+      if (options.cargoMetadataRaw !== undefined) {
+        const raw = typeof options.cargoMetadataRaw === 'function' ? options.cargoMetadataRaw(directory) : options.cargoMetadataRaw;
+        emit(typeof raw === 'string' ? raw : JSON.stringify(raw));
+      } else {
+        const manifestIndex = args.indexOf('--manifest-path');
+        const manifestArg = manifestIndex !== -1 ? args[manifestIndex + 1] : null;
+        const relevantPackages = packages.filter(p => !manifestArg || p.manifest_path === manifestArg || path.dirname(p.manifest_path) === path.dirname(manifestArg));
+        const selected = relevantPackages.length > 0 ? relevantPackages : packages;
+        emit(JSON.stringify({ workspace_members: selected.map(pkg => pkg.id), packages: selected, ...(options.cargoMetadataExtra || {}) }));
+      }
     }
     else if (command === 'stellar' && args[0] === '--version') {
       if (options.missingCli) throw new Error('stellar executable not found');
@@ -321,5 +326,59 @@ test('intentional repeated declarations with the same destination and package su
   assert.equal(results.length, 2);
   assert.equal(results[0].package, 'hello-contract');
   assert.equal(results[1].package, 'hello-contract');
+  assert.deepEqual(fs.readFileSync(path.join(directory, destinations[0])), wasm);
+}));
+
+test('foreign workspace members in Cargo metadata are rejected with actionable error', async () => scenario({
+  cargoMetadataRaw: directory => ({
+    packages: [{ id: 'pkg0', name: 'hello-contract', manifest_path: path.join(directory, 'crate0', 'Cargo.toml'), targets: [{ name: 'hello_contract', crate_types: ['cdylib'] }] }],
+    workspace_members: ['pkg0', 'foreign-crate-id'],
+  }),
+}, async ({ fixtures, directory, commands }) => {
+  await assert.rejects(buildContracts(fixtures, directory), /foreign workspace member foreign-crate-id not found in packages list/);
+  assert.ok(!commands.some(c => c.args[0] === 'contract'));
+}));
+
+test('unusable manifest_path in Cargo metadata is rejected before building', async () => scenario({
+  cargoMetadataRaw: {
+    packages: [{ id: 'pkg0', name: 'hello-contract', manifest_path: '/nonexistent/path/Cargo.toml', targets: [{ name: 'hello_contract', crate_types: ['cdylib'] }] }],
+    workspace_members: ['pkg0'],
+  },
+}, async ({ fixtures, directory, commands }) => {
+  await assert.rejects(buildContracts(fixtures, directory), /has unusable manifest_path \/nonexistent\/path\/Cargo.toml: file does not exist/);
+  assert.ok(!commands.some(c => c.args[0] === 'contract'));
+}));
+
+test('malformed targets in Cargo metadata are rejected before building', async () => scenario({
+  cargoMetadataRaw: directory => ({
+    packages: [{ id: 'pkg0', name: 'hello-contract', manifest_path: path.join(directory, 'crate0', 'Cargo.toml'), targets: 'not-an-array' }],
+    workspace_members: ['pkg0'],
+  }),
+}, async ({ fixtures, directory, commands }) => {
+  await assert.rejects(buildContracts(fixtures, directory), /Invalid Cargo metadata/);
+  assert.ok(!commands.some(c => c.args[0] === 'contract'));
+}));
+
+test('malformed Cargo metadata payload is rejected before building', async () => scenario({
+  cargoMetadataRaw: {
+    packages: 'invalid',
+    workspace_members: ['pkg0'],
+  },
+}, async ({ fixtures, directory, commands }) => {
+  await assert.rejects(buildContracts(fixtures, directory), /Invalid Cargo metadata/);
+  assert.ok(!commands.some(c => c.args[0] === 'contract'));
+}));
+
+test('valid version-1 Cargo metadata with harmless unknown fields passes cleanly', async () => scenario({
+  cargoMetadataExtra: {
+    version: 1,
+    workspace_root: '/workspace',
+    target_directory: '/workspace/target',
+    harmless_extension_field: { key: 'value' },
+  },
+}, async ({ fixtures, directory, destinations, wasm }) => {
+  const results = await buildContracts(fixtures, directory, '1.95.0');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].package, 'hello-contract');
   assert.deepEqual(fs.readFileSync(path.join(directory, destinations[0])), wasm);
 }));

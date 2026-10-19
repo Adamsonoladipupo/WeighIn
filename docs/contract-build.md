@@ -36,6 +36,13 @@ names, missing manifests and build failures are errors. All declarations are
 resolved before builds start; unrelated workspace packages are not selected.
 Multiple declarations of one package share one build.
 
+Cargo workspace metadata (`cargo metadata --no-deps --locked --format-version 1`)
+is parsed and validated against a schema before selecting packages. WeighIn
+verifies that package IDs, names, manifest paths, target crate types, and workspace
+members conform to the expected shape, rejecting foreign workspace members,
+malformed targets, and nonexistent manifest paths with actionable diagnostics, while
+maintaining compatibility with valid version-1 metadata and unknown harmless fields.
+
 All normalized destination paths are preflighted before any build commands or
 file writes. If multiple declarations resolve to the same canonical destination
 through path normalization or directory symlinks, they are permitted only when
