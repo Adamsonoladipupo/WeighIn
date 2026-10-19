@@ -219,17 +219,6 @@ export async function buildContracts(
       process.stdout.write(stdout + stderr);
     return stdout.trim();
   }
-  const rustVersion = await command("rustc", ["--version"], fixturesDir);
-  const rust = rustVersion.match(/^rustc (\d+)\.(\d+)\./);
-  if (
-    !rust ||
-    Number(rust[1]) < 1 ||
-    (Number(rust[1]) === 1 && Number(rust[2]) < 84)
-  ) {
-    throw new Error(
-      `Rust 1.84+ is required for wasm32v1-none; got ${rustVersion}`,
-    );
-  }
   const stellarVersion = await command("stellar", ["--version"], fixturesDir);
   const stellar = stellarVersion.match(/stellar (\d+)\.(\d+)\.(\d+)/);
   if (
@@ -240,6 +229,26 @@ export async function buildContracts(
     throw new Error(
       `Stellar CLI 28.1+ with optimization support is required; got ${stellarVersion}`,
     );
+  }
+
+  const packageRustVersions = new Map<string, string>();
+  async function probePackageCompiler(packageDir: string): Promise<string> {
+    let version = packageRustVersions.get(packageDir);
+    if (!version) {
+      version = await command("rustc", ["--version"], packageDir);
+      const rust = version.match(/^rustc (\d+)\.(\d+)\./);
+      if (
+        !rust ||
+        Number(rust[1]) < 1 ||
+        (Number(rust[1]) === 1 && Number(rust[2]) < 84)
+      ) {
+        throw new Error(
+          `Rust 1.84+ is required for wasm32v1-none; got ${version}`,
+        );
+      }
+      packageRustVersions.set(packageDir, version);
+    }
+    return version;
   }
 
   function validateDestinationPath(
@@ -438,6 +447,9 @@ export async function buildContracts(
       });
     }
 
+    const packageDir = path.dirname(pkg.manifest_path);
+    await probePackageCompiler(packageDir);
+
     plans.push({
       destination,
       canonicalDestination,
@@ -457,6 +469,8 @@ export async function buildContracts(
     targetName,
     wasmPath,
   } of plans) {
+    const packageDir = path.dirname(pkg.manifest_path);
+    const rustVersion = await probePackageCompiler(packageDir);
     let wasm = artifacts.get(pkg.manifest_path);
     if (!wasm) {
       let outputDir: string;

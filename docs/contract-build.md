@@ -43,6 +43,13 @@ members conform to the expected shape, rejecting foreign workspace members,
 malformed targets, and nonexistent manifest paths with actionable diagnostics, while
 maintaining compatibility with valid version-1 metadata and unknown harmless fields.
 
+For each selected package, WeighIn probes the effective compiler compatibility
+within the distinct directory context of that package's manifest (`path.dirname(pkg.manifest_path)`),
+verifying Rust 1.84+ for each crate context. This ensures that any crate-local
+`rust-toolchain` or override configuration is evaluated in its proper directory context
+and rejected before building if incompatible. Explicit toolchain overrides passed via
+`rustToolchain` supply `RUSTUP_TOOLCHAIN` to both the compiler probe and build commands.
+
 All normalized destination paths are preflighted before any build commands or
 file writes. If multiple declarations resolve to the same canonical destination
 through path normalization or directory symlinks, they are permitted only when

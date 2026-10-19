@@ -41,9 +41,9 @@ async function scenario(options, verify) {
     fs.writeFileSync(path.join(directory, destination), 'stale artifact');
   }
   exec.exec = async (command, args, config) => {
-    commands.push({ command, args, env: config.env });
+    commands.push({ command, args, env: config.env, cwd: config.cwd });
     const emit = text => config.listeners.stdout(Buffer.from(text));
-    if (command === 'rustc') emit(options.rust || 'rustc 1.95.0');
+    if (command === 'rustc') emit(typeof options.rust === 'function' ? options.rust(config.cwd, config.env) : (options.rust || 'rustc 1.95.0'));
     else if (command === 'cargo') {
       if (options.cargoMetadataRaw !== undefined) {
         const raw = typeof options.cargoMetadataRaw === 'function' ? options.cargoMetadataRaw(directory) : options.cargoMetadataRaw;
@@ -381,4 +381,46 @@ test('valid version-1 Cargo metadata with harmless unknown fields passes cleanly
   assert.equal(results.length, 1);
   assert.equal(results[0].package, 'hello-contract');
   assert.deepEqual(fs.readFileSync(path.join(directory, destinations[0])), wasm);
+}));
+
+test('probes effective compiler in each distinct package context directory', async () => scenario({
+  names: ['first-contract', 'second-contract'],
+  rust: (cwd) => {
+    return 'rustc 1.95.0 (stable)';
+  },
+}, async ({ fixtures, directory, commands }) => {
+  await buildContracts(fixtures, directory);
+  const rustcCalls = commands.filter(c => c.command === 'rustc');
+  assert.ok(rustcCalls.length >= 2, 'should invoke rustc for distinct package directories');
+  const dir0 = path.join(directory, 'crate0');
+  const dir1 = path.join(directory, 'crate1');
+  assert.ok(rustcCalls.some(c => c.cwd === dir0), 'should probe crate0 context');
+  assert.ok(rustcCalls.some(c => c.cwd === dir1), 'should probe crate1 context');
+}));
+
+test('rejects unsupported crate-local toolchain before building that package', async () => scenario({
+  names: ['first-contract', 'second-contract'],
+  rust: (cwd) => {
+    if (cwd && cwd.endsWith('crate1')) {
+      return 'rustc 1.83.0 (compat-test)';
+    }
+    return 'rustc 1.95.0 (stable)';
+  },
+}, async ({ fixtures, directory, commands }) => {
+  await assert.rejects(buildContracts(fixtures, directory), /Rust 1.84\+ is required for wasm32v1-none; got rustc 1.83.0/);
+  assert.ok(!commands.some(c => c.command === 'stellar' && c.args && c.args[0] === 'contract'), 'should not execute stellar contract build');
+}));
+
+test('preserves explicit rust-toolchain override for both crate checks and builds', async () => scenario({
+  rust: (cwd, env) => {
+    return 'rustc 1.95.0 (override)';
+  },
+}, async ({ fixtures, directory, commands }) => {
+  await buildContracts(fixtures, directory, 'nightly-2024-11-01');
+  const rustcCalls = commands.filter(c => c.command === 'rustc');
+  assert.ok(rustcCalls.length > 0, 'should invoke rustc');
+  assert.ok(rustcCalls.every(c => c.env && c.env.RUSTUP_TOOLCHAIN === 'nightly-2024-11-01'), 'probe command should use toolchain override');
+  const stellarContractCalls = commands.filter(c => c.command === 'stellar' && c.args && c.args[0] === 'contract');
+  assert.ok(stellarContractCalls.length > 0);
+  assert.ok(stellarContractCalls.every(c => c.env && c.env.RUSTUP_TOOLCHAIN === 'nightly-2024-11-01'));
 }));

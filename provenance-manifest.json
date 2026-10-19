@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "purpose": "verifiable WeighIn package build provenance",
-  "source_revision": "40c8713b86068c531d07c4133bf35d8e8d3751ec",
+  "source_revision": "a0dfa2fc16cec0f91a83e93ed9e9c4519999fb4e",
   "tools": {
     "node": "v24.12.0",
     "npm": "unavailable"
@@ -17,7 +17,7 @@
     },
     {
       "path": "bundled/index.js",
-      "sha256": "cb2e8879125fec31d7445f27c438898c5ce155d73034853953b04c6a0b6b9bc4"
+      "sha256": "c21212b25ed6c54782434aa46a2408a078727b200924b817e11c1be608d1f492"
     },
     {
       "path": "native/simulation/Cargo.lock",
@@ -57,7 +57,7 @@
     },
     {
       "path": "src\\build.ts",
-      "sha256": "eac2200d2648c565fb60c5ace390263cb59dfd1909b62929905223d815b2d52c"
+      "sha256": "230dfe79419e9de1848d4d71ee4052dfa70822e85bfa0ae4e4b8f8da90ff7802"
     },
     {
       "path": "src\\cli.ts",
