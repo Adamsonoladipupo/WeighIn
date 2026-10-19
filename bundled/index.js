@@ -53281,6 +53281,22 @@ function validateFootprintKeys(readOnlyKeys, readWriteKeys, sourceLabel = "footp
     );
   }
 }
+function validateLedgerHeaderHash(historyEntry, rowHash) {
+  const headerBytes = historyEntry.header().toXDR();
+  const recomputedHash = crypto2.createHash("sha256").update(headerBytes).digest("hex");
+  const historyHash = historyEntry.hash().toString("hex");
+  if (historyHash !== recomputedHash) {
+    throw new Error(
+      `Ledger header hash mismatch: history-entry hash (${historyHash}) does not match SHA-256 of decoded header bytes (${recomputedHash})`
+    );
+  }
+  if (rowHash && rowHash.toLowerCase() !== recomputedHash.toLowerCase()) {
+    throw new Error(
+      `Ledger header hash mismatch: RPC response hash (${rowHash}) does not match SHA-256 of decoded header bytes (${recomputedHash})`
+    );
+  }
+  return { recomputedHash, historyHash };
+}
 function validateLedgerKeyEntryCorrespondence(keyXdr, dataXdr) {
   const key = types.LedgerKey.fromXDR(keyXdr, "base64");
   const data = types.LedgerEntryData.fromXDR(dataXdr, "base64");
@@ -53788,7 +53804,13 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
     }
     if (drift) continue;
     const headers = external_exports.object({
-      ledgers: external_exports.array(external_exports.object({ sequence: integer, headerXdr: encoded }))
+      ledgers: external_exports.array(
+        external_exports.object({
+          sequence: integer,
+          headerXdr: encoded,
+          hash: external_exports.string().optional()
+        })
+      )
     }).parse(
       await callRpc(
         rpcUrl,
@@ -53825,6 +53847,7 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
     if (header.ledgerSeq() !== simulation.latestLedger || header.ledgerVersion() !== network.protocolVersion) {
       throw new Error("Snapshot header ledger/protocol mismatch");
     }
+    validateLedgerHeaderHash(historyEntry, row.hash);
     const missingConfigs = configNames.filter((name) => {
       const key = configNameToKey.get(name);
       const row2 = rows.get(key);

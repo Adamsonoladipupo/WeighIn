@@ -90,6 +90,8 @@ Batches must share the simulation's reported ledger. Header retrieval requires
 exactly one matching sequence row for the captured ledger with a well-formed
 history entry; ambiguous duplicate headers or malformed entry XDR are rejected,
 while unrelated valid page rows are accepted according to the RPC contract.
+The history-entry hash is strictly validated against the canonical SHA-256 digest of
+decoded header bytes and any returned RPC row hash, rejecting corrupted or mismatched entries before native execution.
 It verifies the matching ledger header, retries the entire capture on drift,
 and expands discovered keys when the helper reports an uncaptured read. After 30
 attempts, incomplete/drifting state is an error. This uses current-state RPC APIs;

@@ -3,6 +3,7 @@ import {
   computeHelperCacheKey,
   resolveSimulationHelper,
   validateFootprintKeys,
+  validateLedgerHeaderHash,
   _resetSimulationHelperState,
 } from "../src/simulation";
 
@@ -169,6 +170,88 @@ describe("Simulation Helper Provisioning & Cache (Issues #75 & #76)", () => {
       const rw = ["SHARED...", "CCCC..."];
       expect(() => validateFootprintKeys(ro, rw)).toThrow(
         /key\(s\) present in both read-only and read-write footprints: \[SHARED\.\.\.\]/,
+      );
+    });
+  });
+
+  describe("Ledger Header Hash validation (#122)", () => {
+    it("accepts valid ledger header history entry whose hash matches decoded header bytes", async () => {
+      const { xdr } = await import("@stellar/stellar-sdk");
+      const crypto = await import("crypto");
+      const replay = (
+        await import("../docs/experiments/repeatability/completed/run-1-native.json")
+      ).default[0];
+
+      const header = xdr.LedgerHeader.fromXDR(
+        replay.input.header_xdr,
+        "base64",
+      );
+      const expectedHashBuf = crypto
+        .createHash("sha256")
+        .update(header.toXDR())
+        .digest();
+      const expectedHashHex = expectedHashBuf.toString("hex");
+
+      const history = new xdr.LedgerHeaderHistoryEntry({
+        hash: expectedHashBuf,
+        header,
+        ext: new xdr.LedgerHeaderHistoryEntryExt(0),
+      });
+
+      const res = validateLedgerHeaderHash(history, expectedHashHex);
+      expect(res.recomputedHash).toBe(expectedHashHex);
+      expect(res.historyHash).toBe(expectedHashHex);
+    });
+
+    it("rejects history entry with mismatched hash", async () => {
+      const { xdr } = await import("@stellar/stellar-sdk");
+      const replay = (
+        await import("../docs/experiments/repeatability/completed/run-1-native.json")
+      ).default[0];
+
+      const header = xdr.LedgerHeader.fromXDR(
+        replay.input.header_xdr,
+        "base64",
+      );
+      const wrongHashBuf = Buffer.alloc(32, 0xaa);
+
+      const history = new xdr.LedgerHeaderHistoryEntry({
+        hash: wrongHashBuf,
+        header,
+        ext: new xdr.LedgerHeaderHistoryEntryExt(0),
+      });
+
+      expect(() => validateLedgerHeaderHash(history)).toThrow(
+        /Ledger header hash mismatch: history-entry hash/i,
+      );
+    });
+
+    it("rejects when RPC row hash disagrees with decoded header hash", async () => {
+      const { xdr } = await import("@stellar/stellar-sdk");
+      const crypto = await import("crypto");
+      const replay = (
+        await import("../docs/experiments/repeatability/completed/run-1-native.json")
+      ).default[0];
+
+      const header = xdr.LedgerHeader.fromXDR(
+        replay.input.header_xdr,
+        "base64",
+      );
+      const expectedHashBuf = crypto
+        .createHash("sha256")
+        .update(header.toXDR())
+        .digest();
+
+      const history = new xdr.LedgerHeaderHistoryEntry({
+        hash: expectedHashBuf,
+        header,
+        ext: new xdr.LedgerHeaderHistoryEntryExt(0),
+      });
+
+      const wrongRowHash =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+      expect(() => validateLedgerHeaderHash(history, wrongRowHash)).toThrow(
+        /Ledger header hash mismatch: RPC response hash/i,
       );
     });
   });

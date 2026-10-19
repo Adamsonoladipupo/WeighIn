@@ -151,6 +151,37 @@ export function validateFootprintKeys(
 }
 
 /**
+ * Validates the cryptographic hash of a ledger-history header against canonical decoded header bytes (#122).
+ * Verifies that the history-entry hash matches SHA-256 of header.toXDR(), and matches
+ * the optional RPC response row hash if present.
+ */
+export function validateLedgerHeaderHash(
+  historyEntry: xdr.LedgerHeaderHistoryEntry,
+  rowHash?: string,
+): { recomputedHash: string; historyHash: string } {
+  const headerBytes = historyEntry.header().toXDR();
+  const recomputedHash = crypto
+    .createHash("sha256")
+    .update(headerBytes)
+    .digest("hex");
+  const historyHash = historyEntry.hash().toString("hex");
+
+  if (historyHash !== recomputedHash) {
+    throw new Error(
+      `Ledger header hash mismatch: history-entry hash (${historyHash}) does not match SHA-256 of decoded header bytes (${recomputedHash})`,
+    );
+  }
+
+  if (rowHash && rowHash.toLowerCase() !== recomputedHash.toLowerCase()) {
+    throw new Error(
+      `Ledger header hash mismatch: RPC response hash (${rowHash}) does not match SHA-256 of decoded header bytes (${recomputedHash})`,
+    );
+  }
+
+  return { recomputedHash, historyHash };
+}
+
+/**
  * Verify that a captured LedgerEntryData is the value addressed by its
  * LedgerKey. Membership in the response is not sufficient: a substituted
  * account, contract, code hash, config setting, or durability would otherwise
@@ -906,7 +937,13 @@ export async function measureInvocation(
     if (drift) continue;
     const headers = z
       .object({
-        ledgers: z.array(z.object({ sequence: integer, headerXdr: encoded })),
+        ledgers: z.array(
+          z.object({
+            sequence: integer,
+            headerXdr: encoded,
+            hash: z.string().optional(),
+          }),
+        ),
       })
       .parse(
         await callRpc(
@@ -947,6 +984,7 @@ export async function measureInvocation(
     ) {
       throw new Error("Snapshot header ledger/protocol mismatch");
     }
+    validateLedgerHeaderHash(historyEntry, row.hash);
     const missingConfigs = configNames.filter((name) => {
       const key = configNameToKey.get(name)!;
       const row = rows.get(key);
