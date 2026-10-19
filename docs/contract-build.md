@@ -36,6 +36,14 @@ names, missing manifests and build failures are errors. All declarations are
 resolved before builds start; unrelated workspace packages are not selected.
 Multiple declarations of one package share one build.
 
+All normalized destination paths are preflighted before any build commands or
+file writes. If multiple declarations resolve to the same canonical destination
+through path normalization or directory symlinks, they are permitted only when
+package ownership agrees (same package identity and manifest path); conflicting
+declarations targeting the same destination from different packages fail immediately.
+When repeated declarations target the same destination, WeighIn writes the artifact
+once and verifies that subsequent declarations produce byte-for-byte identical output.
+
 Each package builds into a fresh temporary output directory:
 
 ```text

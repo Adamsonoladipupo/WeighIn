@@ -54895,6 +54895,23 @@ var path4 = __toESM(require("path"));
 var os = __toESM(require("os"));
 var import_crypto = require("crypto");
 var exec = __toESM(require_exec());
+function getCanonicalPath(filePath) {
+  const normalized = path4.normalize(filePath);
+  let current = normalized;
+  const segments = [];
+  while (current && !fs3.existsSync(current)) {
+    const parent = path4.dirname(current);
+    if (parent === current) break;
+    segments.unshift(path4.basename(current));
+    current = parent;
+  }
+  try {
+    const realCurrent = fs3.existsSync(current) ? fs3.realpathSync(current) : current;
+    return segments.length > 0 ? path4.join(realCurrent, ...segments) : realCurrent;
+  } catch {
+    return normalized;
+  }
+}
 function verifyBuildStorage(directory, bytes = 1024 * 1024) {
   const probePath = path4.join(directory, ".weighin-storage-probe");
   const expected = Buffer.alloc(bytes, 165);
@@ -55036,8 +55053,12 @@ async function buildContracts(fixturesPathOrOptions, workspaceRoot, rustToolchai
   }
   const plans = [];
   const metadataCache = /* @__PURE__ */ new Map();
+  const destinationOwnership = /* @__PURE__ */ new Map();
   for (const contract of fixtures.contracts) {
-    const destination = path4.resolve(fixturesDir, contract.wasm_path);
+    const destination = path4.normalize(
+      path4.resolve(fixturesDir, contract.wasm_path)
+    );
+    const canonicalDestination = getCanonicalPath(destination);
     validateDestinationPath(destination, contract.wasm_path);
     let dir = path4.dirname(destination);
     let manifest = null;
@@ -55139,16 +55160,37 @@ async function buildContracts(fixturesPathOrOptions, workspaceRoot, rustToolchai
         `Cargo package ${pkg.name} manifest escapes workspace root: ${pkg.manifest_path}`
       );
     }
+    const existing = destinationOwnership.get(canonicalDestination);
+    if (existing) {
+      if (existing.pkg.id !== pkg.id || existing.pkg.manifest_path !== pkg.manifest_path) {
+        throw new Error(
+          `Conflicting build destinations: ${contract.wasm_path} resolves to ${canonicalDestination} which is already claimed by package ${existing.pkg.name} (${existing.pkg.manifest_path})`
+        );
+      }
+    } else {
+      destinationOwnership.set(canonicalDestination, {
+        pkg,
+        wasm_path: contract.wasm_path
+      });
+    }
     plans.push({
       destination,
+      canonicalDestination,
       pkg,
       targetName,
       wasmPath: contract.wasm_path
     });
   }
   const artifacts = /* @__PURE__ */ new Map();
+  const writtenDestinations = /* @__PURE__ */ new Map();
   const results = [];
-  for (const { destination, pkg, targetName, wasmPath } of plans) {
+  for (const {
+    destination,
+    canonicalDestination,
+    pkg,
+    targetName,
+    wasmPath
+  } of plans) {
     let wasm = artifacts.get(pkg.manifest_path);
     if (!wasm) {
       let outputDir;
@@ -55190,8 +55232,18 @@ async function buildContracts(fixturesPathOrOptions, workspaceRoot, rustToolchai
       }
     }
     validateDestinationPath(destination, wasmPath);
-    fs3.mkdirSync(path4.dirname(destination), { recursive: true });
-    fs3.writeFileSync(destination, wasm);
+    const prevWritten = writtenDestinations.get(canonicalDestination);
+    if (prevWritten) {
+      if (!prevWritten.equals(wasm)) {
+        throw new Error(
+          `Conflicting build output for destination ${destination}: bytes disagree across declarations`
+        );
+      }
+    } else {
+      fs3.mkdirSync(path4.dirname(destination), { recursive: true });
+      fs3.writeFileSync(destination, wasm);
+      writtenDestinations.set(canonicalDestination, wasm);
+    }
     const record = {
       wasm_path: destination,
       manifest_path: pkg.manifest_path,

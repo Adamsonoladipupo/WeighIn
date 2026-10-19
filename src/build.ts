@@ -27,6 +27,28 @@ export interface BuildContractsOptions {
   rustToolchain?: string;
 }
 
+function getCanonicalPath(filePath: string): string {
+  const normalized = path.normalize(filePath);
+  let current = normalized;
+  const segments: string[] = [];
+  while (current && !fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    segments.unshift(path.basename(current));
+    current = parent;
+  }
+  try {
+    const realCurrent = fs.existsSync(current)
+      ? fs.realpathSync(current)
+      : current;
+    return segments.length > 0
+      ? path.join(realCurrent, ...segments)
+      : realCurrent;
+  } catch {
+    return normalized;
+  }
+}
+
 /** Detect storage errors that the optimizer's temporary-file writer may hide. */
 function verifyBuildStorage(directory: string, bytes = 1024 * 1024): void {
   const probePath = path.join(directory, ".weighin-storage-probe");
@@ -207,13 +229,21 @@ export async function buildContracts(
 
   const plans: Array<{
     destination: string;
+    canonicalDestination: string;
     pkg: CargoPackage;
     targetName: string;
     wasmPath: string;
   }> = [];
   const metadataCache = new Map<string, CargoPackage[]>();
+  const destinationOwnership = new Map<
+    string,
+    { pkg: CargoPackage; wasm_path: string }
+  >();
   for (const contract of fixtures.contracts) {
-    const destination = path.resolve(fixturesDir, contract.wasm_path);
+    const destination = path.normalize(
+      path.resolve(fixturesDir, contract.wasm_path),
+    );
+    const canonicalDestination = getCanonicalPath(destination);
     validateDestinationPath(destination, contract.wasm_path);
 
     let dir = path.dirname(destination);
@@ -332,8 +362,26 @@ export async function buildContracts(
       );
     }
 
+    const existing = destinationOwnership.get(canonicalDestination);
+    if (existing) {
+      if (
+        existing.pkg.id !== pkg.id ||
+        existing.pkg.manifest_path !== pkg.manifest_path
+      ) {
+        throw new Error(
+          `Conflicting build destinations: ${contract.wasm_path} resolves to ${canonicalDestination} which is already claimed by package ${existing.pkg.name} (${existing.pkg.manifest_path})`,
+        );
+      }
+    } else {
+      destinationOwnership.set(canonicalDestination, {
+        pkg,
+        wasm_path: contract.wasm_path,
+      });
+    }
+
     plans.push({
       destination,
+      canonicalDestination,
       pkg,
       targetName,
       wasmPath: contract.wasm_path,
@@ -341,8 +389,15 @@ export async function buildContracts(
   }
 
   const artifacts = new Map<string, Buffer>();
+  const writtenDestinations = new Map<string, Buffer>();
   const results: BuiltContract[] = [];
-  for (const { destination, pkg, targetName, wasmPath } of plans) {
+  for (const {
+    destination,
+    canonicalDestination,
+    pkg,
+    targetName,
+    wasmPath,
+  } of plans) {
     let wasm = artifacts.get(pkg.manifest_path);
     if (!wasm) {
       let outputDir: string;
@@ -388,8 +443,18 @@ export async function buildContracts(
       }
     }
     validateDestinationPath(destination, wasmPath);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, wasm);
+    const prevWritten = writtenDestinations.get(canonicalDestination);
+    if (prevWritten) {
+      if (!prevWritten.equals(wasm)) {
+        throw new Error(
+          `Conflicting build output for destination ${destination}: bytes disagree across declarations`,
+        );
+      }
+    } else {
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, wasm);
+      writtenDestinations.set(canonicalDestination, wasm);
+    }
     const record = {
       wasm_path: destination,
       manifest_path: pkg.manifest_path,
