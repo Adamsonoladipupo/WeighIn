@@ -419,6 +419,30 @@ export async function resolveSimulationHelper(
   return provisioned;
 }
 
+/** Capture and hash the helper executable's content; rejects missing, unreadable, or non-file paths. */
+export function captureHelperIdentity(helperPath: string): string {
+  try {
+    const stats = fs.statSync(helperPath);
+    if (!stats.isFile()) {
+      throw new Error(
+        `Simulation helper at ${helperPath} is not a regular file`,
+      );
+    }
+    const bytes = fs.readFileSync(helperPath);
+    return sha256(bytes);
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.message.startsWith("Simulation helper at")
+    ) {
+      throw err;
+    }
+    throw new Error(
+      `Failed to capture simulation helper identity for ${helperPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 /** Execute the versioned helper transport; never accept missing/invalid meters. */
 export async function simulateSnapshot(
   input: SimulationInput,
@@ -501,13 +525,17 @@ const computeConfigNames = new Set([
   "configSettingContractCostParamsMemoryBytes",
   "configSettingStateArchival",
 ]);
-const configKeys = configNames.map((name) =>
-  xdr.LedgerKey.configSetting(
-    new xdr.LedgerKeyConfigSetting({
-      configSettingId: xdr.ConfigSettingId[name](),
-    }),
-  ).toXDR("base64"),
+const configNameToKey = new Map(
+  configNames.map((name) => [
+    name,
+    xdr.LedgerKey.configSetting(
+      new xdr.LedgerKeyConfigSetting({
+        configSettingId: xdr.ConfigSettingId[name](),
+      }),
+    ).toXDR("base64"),
+  ]),
 );
+const configKeys = Array.from(configNameToKey.values());
 const entriesSchema = z.object({
   latestLedger: integer.positive(),
   entries: z.array(
@@ -698,6 +726,11 @@ export async function measureInvocation(
     throw new Error(
       `Unsupported protocol ${network.protocolVersion}: simulation helper supports 28`,
     );
+  if (transaction.networkPassphrase !== network.passphrase) {
+    throw new Error(
+      `Transaction network passphrase "${transaction.networkPassphrase}" does not match RPC network passphrase "${network.passphrase}"`,
+    );
+  }
   const keys = new Set(configKeys);
   let transientReadFailures = 0;
   let lastCause:
@@ -713,6 +746,7 @@ export async function measureInvocation(
     transient_read: 0,
   };
   let discoveredKeysCount = 0;
+  let initialHelperSha256: string | null = null;
   for (let attempt = 0; attempt < 30; attempt++) {
     if (signal?.aborted) {
       throw signal.reason || new Error("Measurement cancelled");
@@ -825,19 +859,43 @@ export async function measureInvocation(
           signal,
         ),
       );
-    const row = headers.ledgers.find(
+    const matchingRows = headers.ledgers.filter(
       (item) => item.sequence === simulation.latestLedger,
     );
-    if (!row) throw new Error("Snapshot ledger header unavailable");
-    const header = xdr.LedgerHeaderHistoryEntry.fromXDR(
-      row.headerXdr,
-      "base64",
-    ).header();
+    if (matchingRows.length === 0) {
+      throw new Error("Snapshot ledger header unavailable");
+    }
+    if (matchingRows.length > 1) {
+      throw new Error(
+        `Ambiguous duplicate ledger headers returned for sequence ${simulation.latestLedger}`,
+      );
+    }
+    const row = matchingRows[0];
+    let historyEntry: xdr.LedgerHeaderHistoryEntry;
+    try {
+      historyEntry = xdr.LedgerHeaderHistoryEntry.fromXDR(
+        row.headerXdr,
+        "base64",
+      );
+    } catch {
+      throw new Error("Malformed ledger header history entry XDR");
+    }
+    const header = historyEntry.header();
     if (
       header.ledgerSeq() !== simulation.latestLedger ||
       header.ledgerVersion() !== network.protocolVersion
     ) {
       throw new Error("Snapshot header ledger/protocol mismatch");
+    }
+    const missingConfigs = configNames.filter((name) => {
+      const key = configNameToKey.get(name)!;
+      const row = rows.get(key);
+      return !row || !row.xdr;
+    });
+    if (missingConfigs.length > 0) {
+      throw new Error(
+        `Missing required configuration entries: [${missingConfigs.join(", ")}]`,
+      );
     }
     const entries: SnapshotEntry[] = requested.map((key) => {
       const entry = rows.get(key);
@@ -874,10 +932,24 @@ export async function measureInvocation(
       instruction_leeway: 0,
       seed: Array(32).fill(0),
     };
+    const preHelperSha256 = captureHelperIdentity(helperPath);
+    if (initialHelperSha256 === null) {
+      initialHelperSha256 = preHelperSha256;
+    } else if (preHelperSha256 !== initialHelperSha256) {
+      throw new Error(
+        `Simulation helper executable was modified across attempts (expected: ${initialHelperSha256}, current: ${preHelperSha256})`,
+      );
+    }
     let output: SimulationOutput;
     try {
       output = await simulateSnapshot(input, helperPath, signal);
     } catch (failure) {
+      const postFailureSha256 = captureHelperIdentity(helperPath);
+      if (postFailureSha256 !== initialHelperSha256) {
+        throw new Error(
+          `Simulation helper executable was modified during execution (expected: ${initialHelperSha256}, current: ${postFailureSha256})`,
+        );
+      }
       const envelope = parseHelperFailure(failure);
       if (envelope) {
         if (envelope.status !== "uncaptured")
@@ -917,6 +989,12 @@ export async function measureInvocation(
         keys.add(key);
       }
       continue; // Recapture all state, including newly discovered keys, at one ledger.
+    }
+    const postHelperSha256 = captureHelperIdentity(helperPath);
+    if (postHelperSha256 !== initialHelperSha256) {
+      throw new Error(
+        `Simulation helper executable was modified during execution (expected: ${initialHelperSha256}, current: ${postHelperSha256})`,
+      );
     }
     // RPC events are DiagnosticEvent wrappers. Only successful non-diagnostic
     // ContractEvents contribute to this charged resource; preserve their order.
@@ -969,6 +1047,12 @@ export async function measureInvocation(
         "Native compute limits disagree with captured configuration",
       );
     }
+    const finalHelperSha256 = captureHelperIdentity(helperPath);
+    if (finalHelperSha256 !== initialHelperSha256) {
+      throw new Error(
+        `Simulation helper executable was modified before emitting provenance (expected: ${initialHelperSha256}, current: ${finalHelperSha256})`,
+      );
+    }
     return {
       output,
       limits,
@@ -976,7 +1060,7 @@ export async function measureInvocation(
         source: output.source,
         source_version: output.source_version,
         protocol: output.protocol,
-        helper_sha256: sha256(fs.readFileSync(helperPath)),
+        helper_sha256: initialHelperSha256,
         network_id: sha256(network.passphrase),
         ledger: simulation.latestLedger,
         header_sha256: sha256(input.header_xdr),
