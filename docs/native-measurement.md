@@ -80,6 +80,9 @@ mismatched networks fail immediately before any simulation or helper execution.
 
 The adapter captures all footprint keys plus network config, ledger data,
 extensions, last-modified sequence, TTL metadata and explicitly queried absence.
+Read-only and read-write footprint keys from both RPC simulation and the native helper
+are strictly validated for uniqueness and mutual disjointness before counting resources
+or executing simulations; duplicate keys or read/write overlaps fail immediately with an explicit error.
 Every required network configuration setting is identified and verified before
 native helper execution; missing configuration entries fail immediately with a
 bounded list of missing setting names and are not retried as ordinary ledger drift.

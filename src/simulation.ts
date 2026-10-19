@@ -101,6 +101,56 @@ function sameXdr(
 }
 
 /**
+ * Validates uniqueness within read-only and read-write footprint keys and ensures
+ * they are disjoint sets (#121). Rejects malformed footprints before counting resources.
+ */
+export function validateFootprintKeys(
+  readOnlyKeys: string[],
+  readWriteKeys: string[],
+  sourceLabel: string = "footprint",
+): void {
+  const seenReadOnly = new Set<string>();
+  const duplicateReadOnly = new Set<string>();
+  for (const key of readOnlyKeys) {
+    if (seenReadOnly.has(key)) {
+      duplicateReadOnly.add(key);
+    }
+    seenReadOnly.add(key);
+  }
+  if (duplicateReadOnly.size > 0) {
+    throw new Error(
+      `Invalid ${sourceLabel}: duplicate key(s) in read-only footprint: [${[...duplicateReadOnly].join(", ")}]`,
+    );
+  }
+
+  const seenReadWrite = new Set<string>();
+  const duplicateReadWrite = new Set<string>();
+  for (const key of readWriteKeys) {
+    if (seenReadWrite.has(key)) {
+      duplicateReadWrite.add(key);
+    }
+    seenReadWrite.add(key);
+  }
+  if (duplicateReadWrite.size > 0) {
+    throw new Error(
+      `Invalid ${sourceLabel}: duplicate key(s) in read-write footprint: [${[...duplicateReadWrite].join(", ")}]`,
+    );
+  }
+
+  const overlaps: string[] = [];
+  for (const key of seenReadWrite) {
+    if (seenReadOnly.has(key)) {
+      overlaps.push(key);
+    }
+  }
+  if (overlaps.length > 0) {
+    throw new Error(
+      `Invalid ${sourceLabel}: key(s) present in both read-only and read-write footprints: [${overlaps.join(", ")}]`,
+    );
+  }
+}
+
+/**
  * Verify that a captured LedgerEntryData is the value addressed by its
  * LedgerKey. Membership in the response is not sufficient: a substituted
  * account, contract, code hash, config setting, or durability would otherwise
@@ -494,6 +544,11 @@ export async function simulateSnapshot(
       "Invalid simulation helper output: resource fields disagree with transaction-data XDR",
     );
   }
+  validateFootprintKeys(
+    output.read_only_keys,
+    output.read_write_keys,
+    "simulation helper footprint",
+  );
   xdr.ScVal.fromXDR(output.retval_xdr, "base64");
   for (const event of output.contract_events_xdr) {
     if (
@@ -766,11 +821,16 @@ export async function measureInvocation(
       simulation.transactionData,
       "base64",
     ).resources();
-    for (const key of [
-      ...resources.footprint().readOnly(),
-      ...resources.footprint().readWrite(),
-    ])
-      keys.add(key.toXDR("base64"));
+    const roKeys = resources
+      .footprint()
+      .readOnly()
+      .map((k) => k.toXDR("base64"));
+    const rwKeys = resources
+      .footprint()
+      .readWrite()
+      .map((k) => k.toXDR("base64"));
+    validateFootprintKeys(roKeys, rwKeys, "RPC simulation footprint");
+    for (const key of [...roKeys, ...rwKeys]) keys.add(key);
     const requested = [...keys].sort();
     const rows = new Map<
       string,

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   computeHelperCacheKey,
   resolveSimulationHelper,
+  validateFootprintKeys,
   _resetSimulationHelperState,
 } from "../src/simulation";
 
@@ -61,6 +62,25 @@ describe("Simulation Helper Provisioning & Cache (Issues #75 & #76)", () => {
   });
 
   describe("resolveSimulationHelper recovery and deduplication (Issue #75)", () => {
+    let originalPlatform: PropertyDescriptor | undefined;
+    let originalArch: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      originalArch = Object.getOwnPropertyDescriptor(process, "arch");
+      Object.defineProperty(process, "platform", { value: "linux" });
+      Object.defineProperty(process, "arch", { value: "x64" });
+    });
+
+    afterEach(() => {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+      if (originalArch) {
+        Object.defineProperty(process, "arch", originalArch);
+      }
+    });
+
     it("respects explicit executable overrides", async () => {
       const nodeExe = process.execPath;
       const helper = await resolveSimulationHelper(nodeExe);
@@ -118,6 +138,38 @@ describe("Simulation Helper Provisioning & Cache (Issues #75 & #76)", () => {
       expect(res1).toBe("/target/release/weighin-simulation");
       expect(res2).toBe("/target/release/weighin-simulation");
       expect(res3).toBe("/target/release/weighin-simulation");
+    });
+  });
+
+  describe("Footprint key validation (#121)", () => {
+    it("accepts valid disjoint and unique read-only and read-write footprint keys", () => {
+      const ro = ["AAAA...", "BBBB..."];
+      const rw = ["CCCC...", "DDDD..."];
+      expect(() => validateFootprintKeys(ro, rw)).not.toThrow();
+    });
+
+    it("rejects duplicates within read-only footprint keys", () => {
+      const ro = ["AAAA...", "BBBB...", "AAAA..."];
+      const rw = ["CCCC..."];
+      expect(() => validateFootprintKeys(ro, rw)).toThrow(
+        /duplicate key\(s\) in read-only footprint: \[AAAA\.\.\.\]/,
+      );
+    });
+
+    it("rejects duplicates within read-write footprint keys", () => {
+      const ro = ["AAAA..."];
+      const rw = ["CCCC...", "DDDD...", "CCCC..."];
+      expect(() => validateFootprintKeys(ro, rw)).toThrow(
+        /duplicate key\(s\) in read-write footprint: \[CCCC\.\.\.\]/,
+      );
+    });
+
+    it("rejects overlapping keys between read-only and read-write footprints", () => {
+      const ro = ["AAAA...", "SHARED..."];
+      const rw = ["SHARED...", "CCCC..."];
+      expect(() => validateFootprintKeys(ro, rw)).toThrow(
+        /key\(s\) present in both read-only and read-write footprints: \[SHARED\.\.\.\]/,
+      );
     });
   });
 });
