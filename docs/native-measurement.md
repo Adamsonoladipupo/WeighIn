@@ -60,6 +60,15 @@ node dist/cli.js weighin-fixtures.json --rpc-url http://localhost:8000/rpc --out
 The CLI writes measurement JSON and exits 1 on measurement failure. It remains a
 measurement command; threshold comparison is performed by the Action.
 
+## WASM artifact preflight and resolution
+
+Before establishing RPC connections, initializing deployer accounts, or submitting upload/deployment transactions, WeighIn validates every declared contract WASM artifact upfront across all declared fixtures:
+
+- **Existence & regular file**: The declared WASM path relative to the fixtures directory must exist and be a regular file (`stat.isFile()`). Directories, symlinks pointing to non-files, or missing paths fail.
+- **WASM binary magic header**: The file must begin with the 8-byte WebAssembly binary magic number and version (`\0asm\x01\x00\x00\x00`). Truncated or non-WASM files are rejected immediately.
+- **Multi-error aggregation**: When multiple declared WASMs are invalid across one or more contracts, WeighIn aggregates all validation failures into a single contextual error listing `[fixtureId / contractLabel]`, failing closed before funding accounts.
+- **Strict target resolution**: Cross-target substitution (e.g., falling back to `wasm32-unknown-unknown` when `wasm32v1-none` is declared) is disabled by default. If a declared path is missing, measurement fails immediately. To opt in explicitly, pass `--allow-cross-target-substitution` in the CLI, `allow-cross-target-substitution: true` in the Action, or set `WEIGHIN_ALLOW_CROSS_TARGET_SUBSTITUTION=true`.
+
 ## Source and immutable state
 
 CPU comes directly from `simulated_instructions`; memory from `simulated_memory`.
