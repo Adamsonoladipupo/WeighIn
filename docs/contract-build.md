@@ -15,11 +15,19 @@ selects the target, filters specifications, injects metadata and optimizes its
 output. WeighIn fails if the CLI reports skipped optimization; it does not fall
 back to plain Cargo or the older target.
 
-## Artifact selection
+## Artifact selection and workspace boundary
 
-For each declared `wasm_path`, WeighIn locates the nearest owning Cargo manifest
-and reads locked Cargo workspace metadata. The WASM basename must identify
-exactly one workspace `cdylib` target using its Cargo target name (falling back
+The builder API (`buildContracts`) requires an explicit allowed workspace root.
+For each declared `wasm_path`, WeighIn validates that the resolved destination path
+remains strictly within the allowed workspace root, rejecting relative traversal
+escapes (`..`) and symlinks resolving outside the root before executing any commands
+or writing any artifacts.
+
+Manifest search ascends from the declared WASM destination toward the workspace root
+to locate the nearest owning `Cargo.toml`. Search stops at the workspace root boundary
+and never ascends past it to parent directories or filesystem root. Nested legitimate
+Cargo workspaces within the workspace root are fully supported. The WASM basename must
+identify exactly one workspace `cdylib` target using its Cargo target name (falling back
 to the package name when Cargo omits the target name). A package named
 `my-package` with `[lib] name = "contract-library"` emits
 `contract_library.wasm`. Packages with multiple `cdylib` targets are rejected
