@@ -54277,6 +54277,93 @@ async function isContractDeployed(server, contractId) {
     return false;
   }
 }
+var WASM_MAGIC = Buffer.from([
+  0,
+  97,
+  115,
+  109,
+  1,
+  0,
+  0,
+  0
+]);
+function resolveWasmPath(fixturesDir, declaredWasmPath, options) {
+  const wasmPath = path3.resolve(fixturesDir, declaredWasmPath);
+  if (fs2.existsSync(wasmPath)) {
+    return wasmPath;
+  }
+  const allowOptIn = options?.allowCrossTargetSubstitution ?? (process.env.WEIGHIN_ALLOW_CROSS_TARGET_SUBSTITUTION === "true" || process.env.WEIGHIN_ALLOW_CROSS_TARGET_SUBSTITUTION === "1");
+  if (allowOptIn) {
+    let altPath = "";
+    if (wasmPath.includes("wasm32-unknown-unknown")) {
+      altPath = wasmPath.replace("wasm32-unknown-unknown", "wasm32v1-none");
+    } else if (wasmPath.includes("wasm32v1-none")) {
+      altPath = wasmPath.replace("wasm32v1-none", "wasm32-unknown-unknown");
+    }
+    if (altPath && fs2.existsSync(altPath)) {
+      console.warn(
+        `Warning: declared WASM artifact not found at ${wasmPath}; substituting alternate target artifact at ${altPath}`
+      );
+      return altPath;
+    }
+  }
+  throw new Error(
+    `WASM not found: ${wasmPath}
+Build the contract before running measurements.`
+  );
+}
+function validateWasmArtifact(fixturesDir, declaredWasmPath, options) {
+  const resolvedPath = resolveWasmPath(fixturesDir, declaredWasmPath, options);
+  let stat;
+  try {
+    stat = fs2.statSync(resolvedPath);
+  } catch (err) {
+    throw new Error(
+      `WASM artifact inaccessible at ${resolvedPath}: ${err.message}`
+    );
+  }
+  if (!stat.isFile()) {
+    throw new Error(`WASM artifact at ${resolvedPath} is not a regular file`);
+  }
+  const fd = fs2.openSync(resolvedPath, "r");
+  try {
+    const buffer = Buffer.alloc(8);
+    const bytesRead = fs2.readSync(fd, buffer, 0, 8, 0);
+    if (bytesRead < 8 || !buffer.equals(WASM_MAGIC)) {
+      throw new Error(
+        `Invalid WASM header at ${resolvedPath}: expected magic header \\0asm\\x01\\x00\\x00\\x00`
+      );
+    }
+  } finally {
+    fs2.closeSync(fd);
+  }
+  return { resolvedPath };
+}
+function preflightContractArtifacts(fixturesDir, contracts, fixtureId, options) {
+  const resolvedPaths = /* @__PURE__ */ new Map();
+  const errors = [];
+  for (const contract of contracts) {
+    const contractLabel2 = contract.logical_id ?? (contract.id ? `id:${contract.id}` : `wasm:${contract.wasm_path}`);
+    const context3 = `${fixtureId} / ${contractLabel2}`;
+    try {
+      const { resolvedPath } = validateWasmArtifact(
+        fixturesDir,
+        contract.wasm_path,
+        options
+      );
+      resolvedPaths.set(contract.wasm_path, resolvedPath);
+    } catch (err) {
+      errors.push(`[${context3}] ${err.message}`);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `Preflight validation failed for configured contract WASM artifacts:
+${errors.join("\n")}`
+    );
+  }
+  return resolvedPaths;
+}
 async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcUrl) {
   let opts;
   if (typeof fixturesPathOrOptions === "string") {
@@ -54300,6 +54387,12 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
     rawFixtures,
     opts.fixtureId ?? path3.relative(process.cwd(), path3.resolve(opts.fixturesPath))
   );
+  const resolvedWasmPaths = preflightContractArtifacts(
+    fixturesDir,
+    fixturesSpec.contracts,
+    fixturesSpec.fixture_id,
+    { allowCrossTargetSubstitution: opts.allowCrossTargetSubstitution }
+  );
   const server = new rpc_exports.Server(effectiveRpcUrl, { allowHttp: true });
   const deployer = await getOrInitAccount(
     keyFile,
@@ -54309,23 +54402,7 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
   const deployerAddress = Address.fromString(deployer.publicKey());
   const results = [];
   for (const contractSpec of fixturesSpec.contracts) {
-    let wasmPath = path3.resolve(fixturesDir, contractSpec.wasm_path);
-    if (!fs2.existsSync(wasmPath)) {
-      let altPath = "";
-      if (wasmPath.includes("wasm32-unknown-unknown")) {
-        altPath = wasmPath.replace("wasm32-unknown-unknown", "wasm32v1-none");
-      } else if (wasmPath.includes("wasm32v1-none")) {
-        altPath = wasmPath.replace("wasm32v1-none", "wasm32-unknown-unknown");
-      }
-      if (altPath && fs2.existsSync(altPath)) {
-        wasmPath = altPath;
-      } else {
-        throw new Error(
-          `WASM not found: ${wasmPath}
-Build the contract before running measurements.`
-        );
-      }
-    }
+    const wasmPath = resolvedWasmPaths.get(contractSpec.wasm_path);
     const wasmBytes = fs2.readFileSync(wasmPath);
     const wasmHash = crypto3.createHash("sha256").update(wasmBytes).digest();
     const wasmSha256 = wasmHash.toString("hex");
@@ -55411,6 +55488,10 @@ async function run() {
     const metadataPathInput = core3.getInput("metadata-path");
     const buildCommand = core3.getInput("build-command");
     const skipBuild = parseOptionalBooleanInput("skip-build", false);
+    const allowCrossTargetSubstitution = parseOptionalBooleanInput(
+      "allow-cross-target-substitution",
+      false
+    );
     if (buildCommand && skipBuild) {
       throw new Error("build-command and skip-build cannot be used together");
     }
@@ -55458,7 +55539,8 @@ async function run() {
         gitCommit: headSha,
         sdkVersion: getSdkVersion(headWorkspace),
         rpcUrl,
-        keyFile: sharedKeyFile
+        keyFile: sharedKeyFile,
+        allowCrossTargetSubstitution
       });
     } catch (err) {
       throw new Error(`HEAD measurement failed: ${err.message}`);
@@ -55501,7 +55583,8 @@ async function run() {
           gitCommit: baseSha,
           sdkVersion: getSdkVersion(baseDir),
           rpcUrl,
-          keyFile: sharedKeyFile
+          keyFile: sharedKeyFile,
+          allowCrossTargetSubstitution
         });
         for (const contract of baseResults) {
           for (const bench of contract.benchmarks) {

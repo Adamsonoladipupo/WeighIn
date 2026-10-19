@@ -14,7 +14,6 @@ import {
   enforceThresholds,
   Violation,
   PolicyOrigin,
-
 } from "./threshold";
 
 import { renderComment } from "./comment";
@@ -386,6 +385,10 @@ async function run(): Promise<void> {
     const metadataPathInput = core.getInput("metadata-path");
     const buildCommand = core.getInput("build-command");
     const skipBuild = parseOptionalBooleanInput("skip-build", false);
+    const allowCrossTargetSubstitution = parseOptionalBooleanInput(
+      "allow-cross-target-substitution",
+      false,
+    );
 
     if (buildCommand && skipBuild) {
       throw new Error("build-command and skip-build cannot be used together");
@@ -452,6 +455,7 @@ async function run(): Promise<void> {
         sdkVersion: getSdkVersion(headWorkspace),
         rpcUrl,
         keyFile: sharedKeyFile,
+        allowCrossTargetSubstitution,
       });
     } catch (err: any) {
       throw new Error(`HEAD measurement failed: ${err.message}`);
@@ -502,6 +506,7 @@ async function run(): Promise<void> {
           sdkVersion: getSdkVersion(baseDir),
           rpcUrl,
           keyFile: sharedKeyFile,
+          allowCrossTargetSubstitution,
         });
 
         // Log WASM hashes from base
