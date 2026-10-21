@@ -605,9 +605,13 @@ async function run(): Promise<void> {
     validatedDiffJson = JSON.stringify(diff);
     core.info(`Violations: ${violations.length}`);
     for (const v of violations) {
-      core.error(
-        `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
-      );
+      if (v.aggregate_id) {
+        core.error(`[aggregate: ${v.aggregate_id}] ${v.message}`);
+      } else {
+        core.error(
+          `[${contractLabel(v as any)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
+        );
+      }
     }
     core.endGroup();
 

@@ -233,6 +233,7 @@ function compareFunctions(a: FunctionDiff, b: FunctionDiff): number {
 
 function compareViolations(a: Violation, b: Violation): number {
   return (
+    compareCodePoints(a.aggregate_id, b.aggregate_id) ||
     compareCodePoints(a.fixture_id, b.fixture_id) ||
     compareCodePoints(a.logical_id, b.logical_id) ||
     compareCodePoints(a.contract_id, b.contract_id) ||
@@ -281,18 +282,134 @@ export function renderComment(
     lines.push("### ❌ Violations");
     lines.push("");
     for (const v of sortedViolations) {
-      const measured = diff.contracts
-        .find((c) => contractLabel(c) === contractLabel(v))
-        ?.functions.find(
-          (fn) =>
-            fn.function_name === v.function_name && fn.case_id === v.case_id,
-        )
-        ?.metrics.find((m) => m.key === v.metric);
-      lines.push(
-        `- **\`${contractLabel(v)} / ${benchmarkLabel(v)}\` / ${measured ? metricLabel(measured) : METRIC_LABELS[v.metric]}**: ${v.message}`,
-      );
+      if (v.aggregate_id) {
+        lines.push(
+          `- **\`Aggregate: ${v.aggregate_id}\` / ${METRIC_LABELS[v.metric]}**: ${v.message}`,
+        );
+      } else {
+        const measured = diff.contracts
+          .find((c) => contractLabel(c) === contractLabel(v as any))
+          ?.functions.find(
+            (fn) =>
+              fn.function_name === v.function_name && fn.case_id === v.case_id,
+          )
+          ?.metrics.find((m) => m.key === v.metric);
+        lines.push(
+          `- **\`${contractLabel(v as any)} / ${benchmarkLabel(v as any)}\` / ${measured ? metricLabel(measured) : METRIC_LABELS[v.metric]}**: ${v.message}`,
+        );
+      }
     }
     lines.push("");
+  }
+
+  // Aggregate budgets section
+  if (diff.aggregates && diff.aggregates.length > 0) {
+    lines.push("### Aggregate Resource Budgets");
+    lines.push("");
+    for (const agg of diff.aggregates) {
+      lines.push(
+        `#### \`Aggregate: ${agg.name}\` (${agg.member_count} member${agg.member_count === 1 ? "" : "s"})`,
+      );
+      lines.push("");
+      if (agg.description) {
+        lines.push(`> ${agg.description}`);
+        lines.push("");
+      }
+      if (agg.provenance) {
+        lines.push(
+          `Compute source: ${agg.provenance.source}; protocol ${agg.provenance.protocol_version}; network \`${agg.provenance.network_passphrase}\`.`,
+        );
+        lines.push("");
+      }
+
+      lines.push(
+        "| | Metric | Base (Sum) | Head (Sum) | Delta | Change | Semantic Unit |",
+      );
+      lines.push("|---|---|---|---|---|---|---|");
+      for (const m of agg.metrics) {
+        const status =
+          m.availability === "unavailable"
+            ? "⚪"
+            : m.regression
+              ? "🔴"
+              : "🟢";
+        const baseStr =
+          m.base_consumed === null
+            ? "Unavailable"
+            : m.base_consumed.toLocaleString("en-US");
+        const headStr =
+          m.head_consumed === null
+            ? "Unavailable"
+            : m.head_consumed.toLocaleString("en-US");
+        const deltaStr =
+          m.delta === null
+            ? "Unavailable"
+            : m.delta > 0
+              ? `+${m.delta.toLocaleString("en-US")}`
+              : m.delta.toLocaleString("en-US");
+        const pctStr =
+          m.pct === null
+            ? m.delta !== null && m.delta > 0
+              ? "+Infinity%"
+              : "0.0%"
+            : `${m.pct >= 0 ? "+" : ""}${m.pct.toFixed(1)}%`;
+
+        lines.push(
+          `| ${status} | ${METRIC_LABELS[m.key]} | ${baseStr} | ${headStr} | ${deltaStr} | ${pctStr} | ${m.description} |`,
+        );
+      }
+      lines.push("");
+
+      const unavailableMetrics = agg.metrics.filter(
+        (m) => m.availability === "unavailable",
+      );
+      if (unavailableMetrics.length > 0) {
+        for (const m of unavailableMetrics) {
+          lines.push(`- **${METRIC_LABELS[m.key]} unavailable**: ${m.reason}`);
+        }
+        lines.push("");
+      }
+
+      // Member breakdown details
+      lines.push("<details><summary>Member breakdown</summary>");
+      lines.push("");
+      lines.push(
+        "| Member | Function | Case | CPU Instructions (Base → Head) | Memory Bytes (Base → Head) |",
+      );
+      lines.push("|---|---|---|---|---|");
+      for (let i = 0; i < agg.member_count; i++) {
+        const cpuRow = agg.breakdown.cpu_instructions[i];
+        const memRow = agg.breakdown.memory_bytes[i];
+        const memberName =
+          cpuRow.logical_id ?? cpuRow.contract_id ?? `member-${i + 1}`;
+        const cpuBase =
+          cpuRow.base_consumed !== null
+            ? cpuRow.base_consumed.toLocaleString("en-US")
+            : "Unavailable";
+        const cpuHead =
+          cpuRow.head_consumed !== null
+            ? cpuRow.head_consumed.toLocaleString("en-US")
+            : "Unavailable";
+        const memBase =
+          memRow.base_consumed !== null
+            ? memRow.base_consumed.toLocaleString("en-US")
+            : "Unavailable";
+        const memHead =
+          memRow.head_consumed !== null
+            ? memRow.head_consumed.toLocaleString("en-US")
+            : "Unavailable";
+        lines.push(
+          `| \`${memberName}\` | \`${cpuRow.function_name}\` | \`${cpuRow.case_id ?? "default"}\` | ${cpuBase} → ${cpuHead} | ${memBase} → ${memHead} |`,
+        );
+      }
+      lines.push("");
+      lines.push(
+        "> Note: Summed invocation memory reflects total allocation across sequential invocations, not peak concurrent memory.",
+      );
+      lines.push("");
+      lines.push("</details>");
+      lines.push("");
+    }
   }
 
   // New / removed contracts (sorted copies)
