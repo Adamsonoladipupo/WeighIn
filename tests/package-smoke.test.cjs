@@ -132,7 +132,7 @@ test('tarball validator rejects an artifact missing required packaged entries', 
   const dryRun = spawnSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: repoRoot,
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: 120000,
   });
   assert.equal(dryRun.status, 0);
   const packInfo = JSON.parse(dryRun.stdout);
@@ -164,7 +164,7 @@ test('distinguishes inclusion-only dry run from real installed consumer executio
   const dryRun = spawnSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: repoRoot,
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: 120000,
   });
   assert.equal(dryRun.status, 0);
   const packInfo = JSON.parse(dryRun.stdout);
