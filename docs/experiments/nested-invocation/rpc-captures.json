@@ -1,0 +1,86 @@
+[
+  {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "getHealth",
+      "params": null
+    },
+    "raw": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "status": "healthy",
+        "latestLedger": 10397,
+        "latestLedgerCloseTime": "1792574689",
+        "oldestLedger": 7,
+        "oldestLedgerCloseTime": "1792560824",
+        "ledgerRetentionWindow": 120960
+      }
+    }
+  },
+  {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "getNetwork",
+      "params": null
+    },
+    "raw": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "friendbotUrl": "http://localhost:8000/friendbot",
+        "passphrase": "Standalone Network ; February 2017",
+        "protocolVersion": 28
+      }
+    }
+  },
+  {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "getLedgerEntries",
+      "params": {
+        "keys": [
+          "AAAAAAAAAABgP4ME6gKd40JrwPgu80EeBsn4QlTb3mxLwDaBxtazZg=="
+        ]
+      }
+    },
+    "raw": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "entries": [],
+        "latestLedger": 10426
+      }
+    }
+  },
+  {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "getLedgerEntries",
+      "params": {
+        "keys": [
+          "AAAAAAAAAABgP4ME6gKd40JrwPgu80EeBsn4QlTb3mxLwDaBxtazZg=="
+        ]
+      }
+    },
+    "raw": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+        "entries": [
+          {
+            "key": "AAAAAAAAAABgP4ME6gKd40JrwPgu80EeBsn4QlTb3mxLwDaBxtazZg==",
+            "xdr": "AAAAAAAAAABgP4ME6gKd40JrwPgu80EeBsn4QlTb3mxLwDaBxtazZgAAABdIdugAAAAouwAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAA",
+            "lastModifiedLedgerSeq": 10427,
+            "extXdr": "AAAAAA=="
+          }
+        ],
+        "latestLedger": 10429
+      }
+    }
+  }
+]
