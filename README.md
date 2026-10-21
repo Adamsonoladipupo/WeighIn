@@ -246,6 +246,15 @@ revisions, enforce thresholds or post comments. Provision the native helper/RPC,
 then run `node dist/cli.js <fixtures.json> --rpc-url <standalone-rpc> --output <results.json>`
 from a built checkout. See [native provisioning](docs/native-measurement.md).
 
+## Source Accounts
+
+The account that invokes a measured call is recorded in
+`provenance.source_account`, and `measureSourceAccountEffects` from
+`weighin/dist/source-account` measures one case under several source accounts
+while code, arguments, protocol, calibration and resource limits stay fixed.
+It reports the per-metric effect and whether results stay comparable across
+accounts. See [source-account effects](docs/source-account-effects.md).
+
 ## Evidence
 
 [WeighIn Evidence](docs/EVIDENCE.md) links hosted control/regression/threshold
@@ -254,6 +263,9 @@ Evidence conclusions are bounded by the recorded environment.
 [Hosted Soroban Forge validation](docs/hosted-soroban-forge.md) additionally proves
 one real escrow query: changed WASM/address pairing, +14,234 CPU and verified
 strict-policy failure in a permitted isolated fork.
+[Cross-contract nested invocation attribution](docs/nested-invocation.md) proves a
+real caller→callee host call charging one combined footprint with per-contract
+event and return attribution.
 
 ## Known Limitations
 
