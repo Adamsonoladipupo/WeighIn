@@ -236,6 +236,12 @@ revisions, enforce thresholds or post comments. Provision the native helper/RPC,
 then run `node dist/cli.js <fixtures.json> --rpc-url <standalone-rpc> --output <results.json>`
 from a built checkout. See [native provisioning](docs/native-measurement.md).
 
+SDK metadata is reported per contract from the Cargo workspace/lock owning each
+fixture WASM (`contract/Cargo.lock` or a root workspace `Cargo.lock`), or
+`"unknown"` when no owning lock can be established; multiple declared versions
+are listed rather than collapsed to one. It is best-effort on-disk metadata and
+does not prove how a prebuilt WASM was compiled.
+
 ## Evidence
 
 [WeighIn Evidence](docs/EVIDENCE.md) links hosted control/regression/threshold
