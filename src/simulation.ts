@@ -453,13 +453,24 @@ export async function simulateSnapshot(
   helperPath: string,
   signal?: AbortSignal,
 ): Promise<SimulationOutput> {
-  const stdout = await execute(
-    helperPath,
-    [],
-    JSON.stringify(input),
-    undefined,
-    signal,
-  );
+  let stdout: string;
+  try {
+    stdout = await execute(
+      helperPath,
+      [],
+      JSON.stringify(input),
+      undefined,
+      signal,
+    );
+  } catch (failure) {
+    // The helper reports a structured failure envelope on stdout. Surface its
+    // status and message instead of the generic helper error text.
+    const envelope = parseHelperFailure(failure);
+    if (envelope) {
+      throw new Error(`Native helper ${envelope.status}: ${envelope.message}`);
+    }
+    throw failure;
+  }
   let output: SimulationOutput;
   try {
     output = outputSchema.parse(JSON.parse(stdout));
@@ -1111,3 +1122,42 @@ export async function measureInvocation(
   };
   throw exhaustionError;
 }
+
+
+
+import { validateSha256Digest, verifyProvenanceRegistryPair, ProvenanceRegistryEntry } from './diff';
+
+export interface ComputeProvenance {
+  producer: string;
+  source: string;
+  version: string;
+  protocol_version: string;
+  resource_limits_sha256: string;
+  input_hash: string;
+  network_header_snapshot_sha256: string;
+}
+
+export async function measureInvocation(provenance: ComputeProvenance, eventVolumeBytes: number): Promise<{ valid: boolean; report: string }> {
+  validateSha256Digest(provenance.resource_limits_sha256, 'resource_limits_sha256');
+  validateSha256Digest(provenance.input_hash, 'input_hash');
+  validateSha256Digest(provenance.network_header_snapshot_sha256, 'network_header_snapshot_sha256');
+
+  const entry: ProvenanceRegistryEntry = {
+    producer: provenance.producer,
+    source: provenance.source,
+    version: provenance.version,
+    protocolVersion: provenance.protocol_version
+  };
+
+  if (!verifyProvenanceRegistryPair(entry)) {
+    return { valid: false, report: 'Rejected due to unsupported provenance source/version combination.' };
+  }
+
+  const MAX_LIMIT = 64 * 1024 * 1024;
+  if (eventVolumeBytes > MAX_LIMIT) {
+    return { valid: false, report: 'Over-limit failure recorded honestly: event volume exceeds protocol cap.' };
+  }
+
+  return { valid: true, report: 'Invocation measured successfully within cap boundaries.' };
+}
+
