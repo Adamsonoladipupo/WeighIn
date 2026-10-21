@@ -236,6 +236,15 @@ revisions, enforce thresholds or post comments. Provision the native helper/RPC,
 then run `node dist/cli.js <fixtures.json> --rpc-url <standalone-rpc> --output <results.json>`
 from a built checkout. See [native provisioning](docs/native-measurement.md).
 
+## Source Accounts
+
+The account that invokes a measured call is recorded in
+`provenance.source_account`, and `measureSourceAccountEffects` from
+`weighin/dist/source-account` measures one case under several source accounts
+while code, arguments, protocol, calibration and resource limits stay fixed.
+It reports the per-metric effect and whether results stay comparable across
+accounts. See [source-account effects](docs/source-account-effects.md).
+
 ## Evidence
 
 [WeighIn Evidence](docs/EVIDENCE.md) links hosted control/regression/threshold
