@@ -44,13 +44,14 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Verify committed package provenance
+        run: npm run provenance
       - run: npm run bundle
-      - name: Verify no uncommitted changes
+      - name: Verify regenerated bundles
         run: |
-          if [ -n "$(git status --porcelain)" ]; then
-            echo "Error: Uncommitted changes detected after build. Please run 'npm run bundle' locally and commit the results."
-            git status
-            git diff
+          if ! git diff --exit-code -- bundled/; then
+            echo "Error: Regenerated bundles differ from the committed bundles. Please run 'npm run bundle' locally and commit the results."
+            git diff -- bundled/
             exit 1
           fi
       - name: Smoke-test packed npm artifact from clean installed consumer
