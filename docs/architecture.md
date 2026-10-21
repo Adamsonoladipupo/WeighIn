@@ -126,6 +126,14 @@ ledger, input/header/snapshot/full-config hashes, compute calibration and resour
 limit hashes. Different invocation snapshots may use different ledgers. This
 records environment differences; it does not freeze state across the suite.
 
+The provenance also records the invoking source account. `src/measurement.ts`
+accepts an optional `invocationSourceAccount` for a single measured run, and
+`src/source-account.ts::measureSourceAccountEffects` measures one case under
+several source accounts while code, arguments, protocol, calibration and
+resource limits stay fixed. It refuses to report an effect when any held-fixed
+value differs and states whether the results stay comparable across accounts.
+See [source-account effects](source-account-effects.md).
+
 ## Diff and policy
 
 `src/record-schema.ts` provides the authoritative versioned schema and standalone

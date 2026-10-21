@@ -29,7 +29,13 @@ import {
   SUPPORTED_NETWORK_PASSPHRASE,
   SUPPORTED_PROTOCOL_VERSION,
 } from "./network";
-import { isWorkspaceClean, getModifiedFiles, getHeadSha, capture, captureRaw } from "./git-utils";
+import {
+  isWorkspaceClean,
+  getModifiedFiles,
+  getHeadSha,
+  capture,
+  captureRaw,
+} from "./git-utils";
 
 // The configured endpoint is tracked only so the terminal failure path can
 // redact any credential it may contain before reporting.
@@ -202,8 +208,6 @@ function resolveRevisionFixturesPath(
 // Helpers
 // ---------------------------------------------------------------------------
 
-
-
 async function loadPolicy(
   repoDir: string,
   configPathRel: string,
@@ -255,8 +259,6 @@ async function loadPolicy(
     },
   };
 }
-
-
 
 /** Read soroban-sdk version from Cargo.lock (best-effort). */
 function getSdkVersion(repoDir: string): string {
@@ -456,7 +458,7 @@ async function run(): Promise<void> {
     if (!isClean) {
       const modifiedFiles = await getModifiedFiles(headWorkspace);
       throw new Error(
-        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:\n${modifiedFiles.map(f => `  - ${f}`).join("\n")}\n\nCommit or stash changes before running benchmarks.`,
+        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:\n${modifiedFiles.map((f) => `  - ${f}`).join("\n")}\n\nCommit or stash changes before running benchmarks.`,
       );
     }
 
@@ -573,9 +575,13 @@ async function run(): Promise<void> {
     validatedDiffJson = JSON.stringify(diff);
     core.info(`Violations: ${violations.length}`);
     for (const v of violations) {
-      core.error(
-        `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
-      );
+      if (v.aggregate_id) {
+        core.error(`[aggregate: ${v.aggregate_id}] ${v.message}`);
+      } else {
+        core.error(
+          `[${contractLabel(v as any)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
+        );
+      }
     }
     core.endGroup();
 

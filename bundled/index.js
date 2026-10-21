@@ -21452,7 +21452,7 @@ var require_exec = __commonJS({
     exports2.getExecOutput = exports2.exec = void 0;
     var string_decoder_1 = require("string_decoder");
     var tr = __importStar(require_toolrunner());
-    function exec7(commandLine, args, options) {
+    function exec9(commandLine, args, options) {
       return __awaiter2(this, void 0, void 0, function* () {
         const commandArgs = tr.argStringToArray(commandLine);
         if (commandArgs.length === 0) {
@@ -21464,7 +21464,7 @@ var require_exec = __commonJS({
         return runner.exec();
       });
     }
-    exports2.exec = exec7;
+    exports2.exec = exec9;
     function getExecOutput(commandLine, args, options) {
       var _a2, _b;
       return __awaiter2(this, void 0, void 0, function* () {
@@ -21487,7 +21487,7 @@ var require_exec = __commonJS({
           }
         };
         const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
-        const exitCode = yield exec7(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+        const exitCode = yield exec9(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
         stdout += stdoutDecoder.end();
         stderr += stderrDecoder.end();
         return {
@@ -21576,12 +21576,12 @@ var require_platform = __commonJS({
     exports2.isLinux = exports2.isMacOS = exports2.isWindows = exports2.arch = exports2.platform = void 0;
     exports2.getDetails = getDetails;
     var os_1 = __importDefault(require("os"));
-    var exec7 = __importStar(require_exec());
+    var exec9 = __importStar(require_exec());
     var getWindowsInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
-      const { stdout: version2 } = yield exec7.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', void 0, {
+      const { stdout: version2 } = yield exec9.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', void 0, {
         silent: true
       });
-      const { stdout: name } = yield exec7.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Caption"', void 0, {
+      const { stdout: name } = yield exec9.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Caption"', void 0, {
         silent: true
       });
       return {
@@ -21591,7 +21591,7 @@ var require_platform = __commonJS({
     });
     var getMacOsInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
       var _a2, _b, _c, _d2;
-      const { stdout } = yield exec7.getExecOutput("sw_vers", void 0, {
+      const { stdout } = yield exec9.getExecOutput("sw_vers", void 0, {
         silent: true
       });
       const version2 = (_b = (_a2 = stdout.match(/ProductVersion:\s*(.+)/)) === null || _a2 === void 0 ? void 0 : _a2[1]) !== null && _b !== void 0 ? _b : "";
@@ -21602,7 +21602,7 @@ var require_platform = __commonJS({
       };
     });
     var getLinuxInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
-      const { stdout } = yield exec7.getExecOutput("lsb_release", ["-i", "-r", "-s"], {
+      const { stdout } = yield exec9.getExecOutput("lsb_release", ["-i", "-r", "-s"], {
         silent: true
       });
       const [name, version2] = stdout.trim().split("\n");
@@ -31113,7 +31113,7 @@ var require_toml = __commonJS({
 
 // src/action.ts
 var core3 = __toESM(require_core());
-var exec5 = __toESM(require_exec());
+var exec7 = __toESM(require_exec());
 init_github();
 var fs5 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
@@ -35243,7 +35243,8 @@ var PROVENANCE_ALLOWED_KEYS = /* @__PURE__ */ new Set([
   "seed",
   "auth_mode",
   "host_features",
-  "resource_limits_sha256"
+  "resource_limits_sha256",
+  "source_account"
 ]);
 var PROVENANCE_REQUIRED_STRINGS = [
   "source",
@@ -35259,6 +35260,7 @@ var PROVENANCE_REQUIRED_STRINGS = [
 ];
 var METRIC_KEY_SET = new Set(METRIC_KEYS);
 var SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+var ACCOUNT_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
 function isPlainObject3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -35344,6 +35346,14 @@ function validateProvenanceObject(provenance, version2, pPath, diagnostics) {
       version: version2,
       code: "INVALID_RESOURCE_LIMITS_DIGEST",
       message: "Schema 4 requires resource_limits_sha256"
+    });
+  }
+  if (provenance.source_account !== void 0 && (typeof provenance.source_account !== "string" || !ACCOUNT_PUBLIC_KEY_PATTERN.test(provenance.source_account))) {
+    diagnostics.push({
+      path: `${pPath}.source_account`,
+      version: version2,
+      code: "INVALID_SOURCE_ACCOUNT",
+      message: "Invalid compute provenance: source_account must be an Ed25519 account public key"
     });
   }
 }
@@ -35770,7 +35780,10 @@ function validateBenchmarkComparisonCompatibility(baseFn, headFn) {
     "compute_config_sha256",
     "seed",
     "auth_mode",
-    "host_features"
+    "host_features",
+    // The invoking account is part of the measured environment: results
+    // measured under different source accounts are not comparable.
+    "source_account"
   ];
   for (const field of fields) {
     if (!baseFn.provenance || !headFn.provenance || JSON.stringify(baseFn.provenance[field]) !== JSON.stringify(headFn.provenance[field])) {
@@ -53978,7 +53991,8 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
         input_sha256: sha2562(JSON.stringify(input)),
         seed: input.seed,
         auth_mode: output.auth_mode,
-        host_features: output.host_features
+        host_features: output.host_features,
+        source_account: transaction.source
       }
     };
   }
@@ -54076,6 +54090,18 @@ function metricsFromSimulation(output, limits) {
       "ConfigSettingContractEventsV0.txMaxContractEventsSizeBytes"
     )
   };
+}
+function normalizeSourceAccount(publicKey) {
+  if (typeof publicKey !== "string" || !publicKey.trim()) {
+    throw new Error("Invalid invocation source account: expected a public key");
+  }
+  const trimmed = publicKey.trim();
+  if (!StrKey.isValidEd25519PublicKey(trimmed)) {
+    throw new Error(
+      "Invalid invocation source account: expected an Ed25519 account public key (G...)"
+    );
+  }
+  return trimmed;
 }
 function toScVal(arg) {
   const type = arg.type.toLowerCase();
@@ -54282,20 +54308,182 @@ async function submitAndConfirm(server, prepared, phase, rpcUrl, signal) {
   }
 }
 async function isContractDeployed(server, contractId) {
+  const contractScAddress = Address.fromString(contractId).toScAddress();
+  const ledgerKey = types.LedgerKey.contractData(
+    new types.LedgerKeyContractData({
+      contract: contractScAddress,
+      key: types.ScVal.scvLedgerKeyContractInstance(),
+      durability: types.ContractDataDurability.persistent()
+    })
+  );
   try {
-    const contractScAddress = Address.fromString(contractId).toScAddress();
-    const ledgerKey = types.LedgerKey.contractData(
-      new types.LedgerKeyContractData({
-        contract: contractScAddress,
-        key: types.ScVal.scvLedgerKeyContractInstance(),
-        durability: types.ContractDataDurability.persistent()
-      })
-    );
     const res = await server.getLedgerEntries(ledgerKey);
-    return !!(res.entries && res.entries.length > 0);
-  } catch {
-    return false;
+    if (!res || typeof res !== "object" || !Array.isArray(res.entries)) {
+      throw new Error(
+        `Deployment probe returned an invalid ledger response: ${JSON.stringify(res)}`
+      );
+    }
+    if (res.entries.length === 0) return false;
+    if (res.entries.length > 1) {
+      throw new Error(
+        `Deployment probe returned ${res.entries.length} entries for ${contractId}; expected at most one matching contract instance`
+      );
+    }
+    const entry = res.entries[0];
+    if (!entry || typeof entry !== "object") {
+      throw new Error(
+        `Deployment probe returned a malformed entry for ${contractId}: ${JSON.stringify(entry)}`
+      );
+    }
+    const entryKey = typeof entry.key === "string" ? entry.key : void 0;
+    const entryXdr = typeof entry.xdr === "string" ? entry.xdr : void 0;
+    if (typeof entryKey !== "string" || typeof entryXdr !== "string") {
+      throw new Error(
+        `Deployment probe returned a missing key/xdr payload for ${contractId}: ${JSON.stringify(entry)}`
+      );
+    }
+    if (entryKey !== ledgerKey.toXDR("base64")) {
+      throw new Error(
+        `Deployment probe returned an unrelated ledger entry for ${contractId}; expected instance key ${ledgerKey.toXDR("base64")}, got ${entryKey}`
+      );
+    }
+    let ledgerEntry;
+    try {
+      ledgerEntry = types.LedgerEntryData.fromXDR(entryXdr, "base64");
+    } catch (error2) {
+      throw new Error(
+        `Deployment probe returned invalid XDR for ${contractId}: ${error2.message}`
+      );
+    }
+    if (ledgerEntry.switch().name !== "contractData") {
+      throw new Error(
+        `Deployment probe returned ${ledgerEntry.switch().name} for ${contractId}; expected contractData`
+      );
+    }
+    const contractData = ledgerEntry.contractData();
+    if (!contractData) {
+      throw new Error(
+        `Deployment probe returned a contractData record without payload for ${contractId}`
+      );
+    }
+    const instanceKey = contractData.key();
+    if (instanceKey.toXDR("base64") !== types.ScVal.scvLedgerKeyContractInstance().toXDR("base64")) {
+      throw new Error(
+        `Deployment probe returned a non-instance contractData entry for ${contractId}`
+      );
+    }
+    if (contractData.contract().toXDR("base64") !== contractScAddress.toXDR("base64")) {
+      throw new Error(
+        `Deployment probe returned a different contract for ${contractId}; expected ${contractScAddress.toXDR("base64")}`
+      );
+    }
+    return true;
+  } catch (error2) {
+    if (error2 instanceof Error && error2.message.startsWith("Deployment probe")) {
+      throw error2;
+    }
+    throw new Error(
+      `Deployment probe failed for contract ${contractId}: ${error2 instanceof Error ? error2.message : String(error2)}`
+    );
   }
+}
+function resolveContractWasmPath(fixturesDir, wasmPath) {
+  let resolved = path3.resolve(fixturesDir, wasmPath);
+  if (!fs2.existsSync(resolved)) {
+    let altPath = "";
+    if (resolved.includes("wasm32-unknown-unknown")) {
+      altPath = resolved.replace("wasm32-unknown-unknown", "wasm32v1-none");
+    } else if (resolved.includes("wasm32v1-none")) {
+      altPath = resolved.replace("wasm32v1-none", "wasm32-unknown-unknown");
+    }
+    if (altPath && fs2.existsSync(altPath)) {
+      resolved = altPath;
+    } else {
+      throw new Error(
+        `WASM not found: ${resolved}
+Build the contract before running measurements.`
+      );
+    }
+  }
+  return resolved;
+}
+async function ensureContractDeployed(options) {
+  const { server, deployer, deployerAddress, wasmBytes, wasmHash, salt } = options;
+  const deployed = await isContractDeployed(server, options.contractId);
+  if (deployed) {
+    console.log(`Already deployed at ${options.contractId}`);
+    return;
+  }
+  console.log(`Installing WASM...`);
+  let account = await server.getAccount(deployer.publicKey());
+  const uploadTx = new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+  }).addOperation(Operation.uploadContractWasm({ wasm: wasmBytes })).setTimeout(30).build();
+  let preparedUpload;
+  try {
+    preparedUpload = await server.prepareTransaction(uploadTx);
+  } catch (err) {
+    console.error(
+      `WASM upload preparation failed at ${sanitizeEndpoint(options.rpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), options.rpcUrl)}`
+    );
+    throw err;
+  }
+  preparedUpload.sign(deployer);
+  await submitAndConfirm(
+    server,
+    preparedUpload,
+    "WASM upload",
+    options.rpcUrl,
+    options.signal
+  );
+  console.log(`WASM installed. Deploying contract instance...`);
+  account = await server.getAccount(deployer.publicKey());
+  const createTx = new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+  }).addOperation(
+    Operation.createCustomContract({
+      wasmHash,
+      address: deployerAddress,
+      salt
+    })
+  ).setTimeout(30).build();
+  const preparedCreate = await server.prepareTransaction(createTx);
+  preparedCreate.sign(deployer);
+  await submitAndConfirm(
+    server,
+    preparedCreate,
+    "contract creation",
+    options.rpcUrl,
+    options.signal
+  );
+  console.log(`Deployed at ${options.contractId}`);
+}
+async function buildInvocationTransaction(options) {
+  const { server, sourceAccount, contractId, invocation } = options;
+  if (options.signal?.aborted) {
+    throw options.signal.reason || new Error("Measurement cancelled");
+  }
+  let account;
+  try {
+    account = await server.getAccount(sourceAccount);
+  } catch (err) {
+    throw new Error(
+      `Invocation source account is not available on the network: ${sourceAccount} (${redactEndpointSecrets(String(err?.message ?? err), options.rpcUrl)})`
+    );
+  }
+  const argsSc = invocation.args.map(toScVal);
+  return new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+  }).addOperation(
+    Operation.invokeContractFunction({
+      contract: contractId,
+      function: invocation.function_name,
+      args: argsSc
+    })
+  ).setTimeout(30).build();
 }
 async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcUrl) {
   let opts;
@@ -54327,25 +54515,21 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
     opts.signal
   );
   const deployerAddress = Address.fromString(deployer.publicKey());
+  let invocationSourceAccount = deployer.publicKey();
+  if (opts.invocationSourceAccount !== void 0) {
+    invocationSourceAccount = normalizeSourceAccount(
+      opts.invocationSourceAccount
+    );
+    if (invocationSourceAccount !== deployer.publicKey()) {
+      console.log(`Invocation source account: ${invocationSourceAccount}`);
+    }
+  }
   const results = [];
   for (const contractSpec of fixturesSpec.contracts) {
-    let wasmPath = path3.resolve(fixturesDir, contractSpec.wasm_path);
-    if (!fs2.existsSync(wasmPath)) {
-      let altPath = "";
-      if (wasmPath.includes("wasm32-unknown-unknown")) {
-        altPath = wasmPath.replace("wasm32-unknown-unknown", "wasm32v1-none");
-      } else if (wasmPath.includes("wasm32v1-none")) {
-        altPath = wasmPath.replace("wasm32v1-none", "wasm32-unknown-unknown");
-      }
-      if (altPath && fs2.existsSync(altPath)) {
-        wasmPath = altPath;
-      } else {
-        throw new Error(
-          `WASM not found: ${wasmPath}
-Build the contract before running measurements.`
-        );
-      }
-    }
+    const wasmPath = resolveContractWasmPath(
+      fixturesDir,
+      contractSpec.wasm_path
+    );
     const wasmBytes = fs2.readFileSync(wasmPath);
     const wasmHash = crypto3.createHash("sha256").update(wasmBytes).digest();
     const wasmSha256 = wasmHash.toString("hex");
@@ -54354,74 +54538,31 @@ Build the contract before running measurements.`
     const salt = crypto3.createHash("sha256").update(wasmHash).digest();
     const contractId = calculateContractId(deployer.publicKey(), salt);
     console.log(`Contract ID: ${contractId}`);
-    const deployed = await isContractDeployed(server, contractId);
-    if (!deployed) {
-      console.log(`Installing WASM...`);
-      let account = await server.getAccount(deployer.publicKey());
-      const uploadTx = new TransactionBuilder(account, {
-        fee: "1000000",
-        networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
-      }).addOperation(Operation.uploadContractWasm({ wasm: wasmBytes })).setTimeout(30).build();
-      let preparedUpload;
-      try {
-        preparedUpload = await server.prepareTransaction(uploadTx);
-      } catch (err) {
-        console.error(
-          `WASM upload preparation failed at ${sanitizeEndpoint(effectiveRpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), effectiveRpcUrl)}`
-        );
-        throw err;
-      }
-      preparedUpload.sign(deployer);
-      await submitAndConfirm(
-        server,
-        preparedUpload,
-        "WASM upload",
-        effectiveRpcUrl,
-        opts.signal
-      );
-      console.log(`WASM installed. Deploying contract instance...`);
-      account = await server.getAccount(deployer.publicKey());
-      const createTx = new TransactionBuilder(account, {
-        fee: "1000000",
-        networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
-      }).addOperation(
-        Operation.createCustomContract({
-          wasmHash,
-          address: deployerAddress,
-          salt
-        })
-      ).setTimeout(30).build();
-      const preparedCreate = await server.prepareTransaction(createTx);
-      preparedCreate.sign(deployer);
-      await submitAndConfirm(
-        server,
-        preparedCreate,
-        "contract creation",
-        effectiveRpcUrl,
-        opts.signal
-      );
-      console.log(`Deployed at ${contractId}`);
-    } else {
-      console.log(`Already deployed at ${contractId}`);
-    }
+    await ensureContractDeployed({
+      server,
+      deployer,
+      deployerAddress,
+      wasmBytes,
+      wasmHash,
+      salt,
+      contractId,
+      rpcUrl: effectiveRpcUrl,
+      signal: opts.signal
+    });
     const benchmarks = [];
     for (const invokeSpec of contractSpec.invocations) {
       if (opts.signal?.aborted) {
         throw opts.signal.reason || new Error("Measurement cancelled by caller");
       }
       console.log(`Simulating ${invokeSpec.function_name}...`);
-      const account = await server.getAccount(deployer.publicKey());
-      const argsSc = invokeSpec.args.map(toScVal);
-      const invokeTx = new TransactionBuilder(account, {
-        fee: "1000000",
-        networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
-      }).addOperation(
-        Operation.invokeContractFunction({
-          contract: contractId,
-          function: invokeSpec.function_name,
-          args: argsSc
-        })
-      ).setTimeout(30).build();
+      const invokeTx = await buildInvocationTransaction({
+        server,
+        sourceAccount: invocationSourceAccount,
+        contractId,
+        invocation: invokeSpec,
+        rpcUrl: effectiveRpcUrl,
+        signal: opts.signal
+      });
       const simRes = await server.simulateTransaction(invokeTx);
       if (rpc_exports.Api.isSimulationError(simRes)) {
         throw new Error(
@@ -55247,6 +55388,58 @@ function buildPrMetadata(repository, prNumber, headSha) {
   };
 }
 
+// src/git-utils.ts
+var exec5 = __toESM(require_exec());
+async function capture(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    },
+    silent: true
+  });
+  return out.trim();
+}
+async function captureRaw(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    silent: true,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    }
+  });
+  return out;
+}
+async function isWorkspaceClean(dir) {
+  try {
+    const status = await capture("git", ["status", "--porcelain"], dir);
+    return status.trim() === "";
+  } catch {
+    return false;
+  }
+}
+async function getModifiedFiles(dir) {
+  try {
+    const status = await capture("git", ["status", "--porcelain"], dir);
+    return status.split("\n").filter((line) => line.trim()).map((line) => line.substring(3).trim());
+  } catch {
+    return [];
+  }
+}
+async function getHeadSha(dir) {
+  try {
+    return await capture("git", ["rev-parse", "HEAD"], dir);
+  } catch {
+    return "unknown";
+  }
+}
+
 // src/action.ts
 var configuredRpcUrl = "";
 var validatedDiffJson = null;
@@ -55315,12 +55508,12 @@ async function validateBaseRef(repoRoot, ref) {
     );
   }
   if (/^[0-9a-fA-F]{7,40}$/.test(ref)) return;
-  const branchRef = await exec5.exec(
+  const branchRef = await exec7.exec(
     "git",
     ["check-ref-format", `refs/heads/${ref}`],
     { cwd: repoRoot, ignoreReturnCode: true, silent: true }
   );
-  const tagRef = await exec5.exec(
+  const tagRef = await exec7.exec(
     "git",
     ["check-ref-format", `refs/tags/${ref}`],
     { cwd: repoRoot, ignoreReturnCode: true, silent: true }
@@ -55367,32 +55560,6 @@ function resolveRevisionFixturesPath(worktreeRoot, fixturesPathInput, revision) 
   }
   return resolved;
 }
-async function capture(cmd, args, cwd) {
-  let out = "";
-  await exec5.exec(cmd, args, {
-    cwd,
-    listeners: {
-      stdout: (d) => {
-        out += d.toString();
-      }
-    },
-    silent: true
-  });
-  return out.trim();
-}
-async function captureRaw(cmd, args, cwd) {
-  let out = "";
-  await exec5.exec(cmd, args, {
-    cwd,
-    silent: true,
-    listeners: {
-      stdout: (d) => {
-        out += d.toString();
-      }
-    }
-  });
-  return out;
-}
 async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
   if (!trustedRef && !trustedPath) {
     const configPath = path6.resolve(repoDir, configPathRel || "weighin.toml");
@@ -55437,13 +55604,6 @@ async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
     }
   };
 }
-async function getHeadSha(dir) {
-  try {
-    return await capture("git", ["rev-parse", "HEAD"], dir);
-  } catch {
-    return "unknown";
-  }
-}
 function getSdkVersion(repoDir) {
   for (const rel of ["Cargo.lock", "contract/Cargo.lock"]) {
     const lockPath = path6.join(repoDir, rel);
@@ -55459,13 +55619,13 @@ function getSdkVersion(repoDir) {
   return "unknown";
 }
 async function checkoutRef(repoRoot, ref, label) {
-  await exec5.exec("git", ["fetch", "--depth=1", "origin", ref], {
+  await exec7.exec("git", ["fetch", "--depth=1", "origin", ref], {
     cwd: repoRoot
   });
   const dir = fs5.mkdtempSync(path6.join(os2.tmpdir(), `weighin-${label}-`));
   core3.info(`Checking out ${ref} into ${dir}`);
   try {
-    await exec5.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
+    await exec7.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
       cwd: repoRoot
     });
   } catch (error2) {
@@ -55478,7 +55638,7 @@ async function checkoutRef(repoRoot, ref, label) {
 }
 async function removeWorktree(repoRoot, dir) {
   try {
-    await exec5.exec("git", ["worktree", "remove", "--force", dir], {
+    await exec7.exec("git", ["worktree", "remove", "--force", dir], {
       cwd: repoRoot
     });
   } catch {
@@ -55576,6 +55736,16 @@ async function run() {
     core3.startGroup("Building + measuring HEAD");
     const headSha = await getHeadSha(headWorkspace);
     core3.info(`HEAD SHA: ${headSha}`);
+    const isClean = await isWorkspaceClean(headWorkspace);
+    if (!isClean) {
+      const modifiedFiles = await getModifiedFiles(headWorkspace);
+      throw new Error(
+        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:
+${modifiedFiles.map((f) => `  - ${f}`).join("\n")}
+
+Commit or stash changes before running benchmarks.`
+      );
+    }
     let headResults;
     try {
       await buildForRevision(

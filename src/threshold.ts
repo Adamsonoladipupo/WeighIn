@@ -2,7 +2,15 @@ import * as fs from "fs";
 import * as TOML from "toml";
 import { z } from "zod";
 import { formatZodError } from "./config";
-import { DiffResult, METRIC_KEYS, MetricDiff, MetricKey } from "./diff";
+import {
+  DiffResult,
+  METRIC_KEYS,
+  MetricDiff,
+  MetricKey,
+  BenchmarkSelector,
+  AggregateBudgetConfig,
+  computeAggregateDiffs,
+} from "./diff";
 import * as crypto from "crypto";
 
 // ---------------------------------------------------------------------------
@@ -32,12 +40,15 @@ export interface WeighinConfig {
   limits?: {
     global?: Partial<Record<MetricKey, number>>;
     functions?: Record<string, Partial<Record<MetricKey, number>>>;
+    aggregates?: Record<string, Partial<Record<MetricKey, number>>>;
   };
   thresholds?: {
     global?: GlobalThresholds;
     /** Per-function overrides keyed by function name */
     functions?: Record<string, Partial<Record<MetricKey, RuleValue>>>;
+    aggregates?: Record<string, Partial<Record<MetricKey, RuleValue>>>;
   };
+  aggregates?: Record<string, AggregateBudgetConfig>;
 }
 
 export interface PolicyOrigin {
@@ -65,12 +76,31 @@ const metricRules = z
     Object.fromEntries(METRIC_KEYS.map((key) => [key, ruleSchema.optional()])),
   )
   .strict();
+const benchmarkSelectorSchema = z
+  .object({
+    fixture_id: z.string().min(1).optional(),
+    logical_id: z.string().min(1).optional(),
+    function_name: z.string().min(1),
+    case_id: z.string().min(1).optional(),
+  })
+  .strict();
+const aggregateBudgetConfigSchema = z
+  .object({
+    description: z.string().optional(),
+    members: z.array(benchmarkSelectorSchema).min(1),
+    limits: z.record(z.enum(METRIC_KEYS), percentage).optional(),
+    thresholds: metricRules.optional(),
+  })
+  .strict();
 const configSchema = z
   .object({
     limits: z
       .object({
         global: z.record(z.enum(METRIC_KEYS), percentage).optional(),
         functions: z
+          .record(z.string().min(1), z.record(z.enum(METRIC_KEYS), percentage))
+          .optional(),
+        aggregates: z
           .record(z.string().min(1), z.record(z.enum(METRIC_KEYS), percentage))
           .optional(),
       })
@@ -87,8 +117,12 @@ const configSchema = z
           .strict()
           .optional(),
         functions: z.record(z.string().min(1), metricRules).optional(),
+        aggregates: z.record(z.string().min(1), metricRules).optional(),
       })
       .strict()
+      .optional(),
+    aggregates: z
+      .record(z.string().min(1), aggregateBudgetConfigSchema)
       .optional(),
   })
   .strict();
@@ -152,15 +186,17 @@ export function policyContentSha256(content: string): string {
 // ---------------------------------------------------------------------------
 
 export interface Violation {
+  aggregate_id?: string;
   fixture_id?: string;
   logical_id?: string;
   case_id?: string;
-  contract_id: string;
-  function_name: string;
+  contract_id?: string;
+  function_name?: string;
   metric: MetricKey;
   delta: number | null;
   pct: number | null;
   rule: string;
+  rule_source?: string;
   message: string;
 }
 
@@ -253,13 +289,136 @@ export function enforceThresholds(
   config: WeighinConfig | null,
 ): Violation[] {
   if (config !== null) config = validateConfig(config);
-  if (!config?.thresholds && !config?.limits) return [];
+  if (!config?.thresholds && !config?.limits && !config?.aggregates) return [];
 
   const global = config?.thresholds?.global ?? {};
   const perFunction = config?.thresholds?.functions ?? {};
   const globalLimits = config?.limits?.global ?? {};
   const functionLimits = config?.limits?.functions ?? {};
   const violations: Violation[] = [];
+
+  // -------------------------------------------------------------------------
+  // Aggregate threshold & limit enforcement
+  // -------------------------------------------------------------------------
+  const hasAggregatesConfig =
+    Boolean(config?.aggregates && Object.keys(config.aggregates).length > 0) ||
+    Boolean(
+      config?.limits?.aggregates &&
+        Object.keys(config.limits.aggregates).length > 0,
+    ) ||
+    Boolean(
+      config?.thresholds?.aggregates &&
+        Object.keys(config.thresholds.aggregates).length > 0,
+    );
+
+  if (hasAggregatesConfig) {
+    if (!diff.aggregates) {
+      computeAggregateDiffs(diff, config);
+    }
+
+    const aggregateLimits = config?.limits?.aggregates ?? {};
+    const aggregateThresholds = config?.thresholds?.aggregates ?? {};
+
+    for (const aggDiff of diff.aggregates ?? []) {
+      const name = aggDiff.name;
+      const aggConfig = config?.aggregates?.[name];
+      const limits = { ...aggConfig?.limits, ...aggregateLimits[name] };
+      const thresholds = {
+        ...aggConfig?.thresholds,
+        ...aggregateThresholds[name],
+      };
+
+      // 1. Absolute limits
+      for (const [metricKeyStr, limit] of Object.entries(limits)) {
+        const metricKey = metricKeyStr as MetricKey;
+        if (limit === undefined) continue;
+
+        const aggMetric = aggDiff.metrics.find((m) => m.key === metricKey);
+        if (
+          !aggMetric ||
+          aggMetric.availability === "unavailable" ||
+          aggMetric.head_consumed === null
+        ) {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: null,
+            pct: null,
+            rule: `absolute_limit(${limit})`,
+            rule_source: `aggregates.${name}.limits.${metricKey}`,
+            message: `${metricKey} unavailable; cannot evaluate configured aggregate absolute limit: ${aggMetric?.reason ?? "measured value unavailable"}`,
+          });
+        } else if (aggMetric.head_consumed > limit) {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: aggMetric.head_consumed - limit,
+            pct: null,
+            rule: `absolute_limit(${limit})`,
+            rule_source: `aggregates.${name}.limits.${metricKey}`,
+            message: `${metricKey} exceeded aggregate absolute limit: limit ${limit}, actual ${aggMetric.head_consumed}`,
+          });
+        }
+      }
+
+      // 2. Relative thresholds
+      for (const [metricKeyStr, rule] of Object.entries(thresholds)) {
+        const metricKey = metricKeyStr as MetricKey;
+        if (rule === undefined) continue;
+
+        const ruleStr =
+          typeof rule === "number" ? `allow_${rule}_percent_increase` : rule;
+        if (ruleStr === "ignore") continue;
+
+        const aggMetric = aggDiff.metrics.find((m) => m.key === metricKey);
+        if (!aggMetric || aggMetric.availability === "unavailable") {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: null,
+            pct: null,
+            rule: ruleStr,
+            rule_source: `aggregates.${name}.thresholds.${metricKey}`,
+            message: `${metricKey} unavailable; cannot evaluate configured aggregate policy: ${aggMetric?.reason ?? "measured value unavailable"}`,
+          });
+          continue;
+        }
+
+        if (!aggMetric.regression) continue;
+
+        if (ruleStr === "strict_zero_tolerance") {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: aggMetric.delta,
+            pct: aggMetric.pct,
+            rule: ruleStr,
+            rule_source: `aggregates.${name}.thresholds.${metricKey}`,
+            message: `${metricKey} increased by ${aggMetric.delta} (strict zero tolerance)`,
+          });
+          continue;
+        }
+
+        const allowedPct =
+          typeof rule === "number" ? rule : parseAllowPct(ruleStr);
+        if (allowedPct !== null) {
+          if (aggMetric.pct === null || aggMetric.pct > allowedPct) {
+            const pctStr =
+              aggMetric.pct === null ? "Infinity" : aggMetric.pct.toFixed(2);
+            violations.push({
+              aggregate_id: name,
+              metric: metricKey,
+              delta: aggMetric.delta,
+              pct: aggMetric.pct,
+              rule: ruleStr,
+              rule_source: `aggregates.${name}.thresholds.${metricKey}`,
+              message: `${metricKey} increased by ${pctStr}% (limit ${allowedPct}%)`,
+            });
+          }
+        }
+      }
+    }
+  }
 
   const comparedNames = new Set(
     diff.contracts.flatMap((contract) =>

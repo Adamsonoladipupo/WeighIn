@@ -16,6 +16,7 @@ see [Evidence](EVIDENCE.md), [metric provenance](metric-provenance.md) and
 | State between revisions | Environment-dependent | Snapshots are immutable per invocation, not across the whole suite. BASE/HEAD may use different ledgers. Ledger/time/state changes can change resources even when WASM is unchanged ([controlled ledger-variation proof](ledger-variation.md)). Comparable provenance does not freeze arbitrary state |
 | Fixture execution | Unsupported chaining | Invocations are simulated independently; writes are discarded. Upload/deployment is submitted. Prior invocation output/state cannot be referenced as setup for the next case |
 | Authorization / randomness | Not yet validated beyond documented mode | Native replay uses recording auth with testutils/recording_mode and a fixed zero seed. It is not signed production authorization. RPC/native disagreement fails rather than blending resources |
+| Source account | Partially validated | The invoking account is recorded in `provenance.source_account` and is compared with the other environment identities, so records measured under different accounts are reported as incompatible. The [source-account proof](source-account-effects.md) covers one contract case on one protocol-28 standalone network: the account changed no measured metric there. Protocol 28 contracts cannot observe the invoker, and recording authorization does not prove that an account satisfies the authorization requirements of a case |
 | Fixture arguments | Unsupported outside listed conversions | `toScVal` supports bool, string, symbol, u32/i32, u64/i64/u128/i128, address, hex bytes, typed vec/map. Large integers must be strings. Other ScVal types and output substitution are unsupported |
 | Contract builds | Environment-dependent | Default build resolves workspace cdylib target names (falling back to package names when the target name is omitted) from fixture WASM basenames and rejects packages with multiple cdylib targets. Tools, locked dependency access and healthy temporary storage are caller requirements. SDK-specific Rust minimums can exceed the builder's gate |
 | Custom / prebuilt builds | Environment-dependent | `build-command` and `skip-build` bypass CLI/version/optimization/fresh-output/storage validation. Callers own artifact freshness and comparable build flags |
@@ -37,14 +38,3 @@ see [Evidence](EVIDENCE.md), [metric provenance](metric-provenance.md) and
 See [dependency security review](DEPENDENCY_SECURITY.md) for the dated npm audit,
 resolved advisory paths, actual execution exposure and validation. Audit results
 are a snapshot, not a guarantee against future advisories.
-
-
-# Known Limitations & Protocol Safeguards
-
-## Event-Volume Resource Accounting
-- Workloads approaching the supported protocol cap (64 MB / 10,000 events) are strictly audited.
-- Over-limit failures are recorded transparently without synthesizing or fabricating metrics.
-
-## Provenance Source & Version Pairing
-- All contract execution records must match verified producer/source/version/protocol combination entries registered in the protocol registry.
-- Unrecognized or arbitrary non-blank strings are strictly rejected to maintain comparison integrity.

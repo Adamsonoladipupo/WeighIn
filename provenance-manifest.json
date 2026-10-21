@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "purpose": "verifiable WeighIn package build provenance",
-  "source_revision": "1b6404e286b91fc65e998dcbf938ac5e3dbde589",
+  "source_revision": "e7ec9db78104ffeeeb33cb13950100bbaee0de66",
   "tools": {
-    "node": "v24.12.0",
-    "npm": "unavailable"
+    "node": "v22.23.2",
+    "npm": "10.9.8"
   },
   "inputs": [
     {
@@ -17,7 +17,7 @@
     },
     {
       "path": "bundled/index.js",
-      "sha256": "7c5ae4adce27364195622b64b6cee5f2540582df018ab45d836aa0884fa32098"
+      "sha256": "4a71a471ba3cad476568341b411cb0d982e537a139cf8f1516a8e2db5093b3e0"
     },
     {
       "path": "native/simulation/Cargo.lock",
@@ -44,8 +44,8 @@
       "sha256": "18cdf61d694ad1b3007fe55e82287657d5896150171c05e7fdd59ec2e9a507cb"
     },
     {
-      "path": "src\\action.ts",
-      "sha256": "e81a8dabe4c72a00850326a62b80fb02d4ad9ba069b70fe455a8cb414ecf629c"
+      "path": "src/action.ts",
+      "sha256": "44836a7b80fbf43c4e9b9c5a8890fa1bbfe2d26780799faa6ffd7e9beb1c7527"
     },
     {
       "path": "src\\audit-policy.ts",
@@ -88,12 +88,16 @@
       "sha256": "99aa1255759a6de8ac747f4bbf7bef656693d79783453e9bd7699b25659dc07b"
     },
     {
-      "path": "src\\identity.ts",
-      "sha256": "2c5b5e09625e5c577fbb527b56a08e4c8a160f6cf07703192199742207576c7f"
+      "path": "src/git-utils.ts",
+      "sha256": "8ab417117aeae423812950bec1be424deeb5f9195f11e561fe33021113462027"
     },
     {
-      "path": "src\\measurement.ts",
-      "sha256": "f06d12630d551acab3489286cf44b6ec9e8fb2e6547e57ae446e10aaa560e16f"
+      "path": "src/identity.ts",
+      "sha256": "9da2912c09aa7ccfc1f711d25d5fc5eb2fe4080383239a1adff6f979cb71494f"
+    },
+    {
+      "path": "src/measurement.ts",
+      "sha256": "dda0a808d7d89c9a461c0a9d31d4889bcf43af789b838b28f9942a9479b434a8"
     },
     {
       "path": "src\\network.ts",
@@ -104,16 +108,21 @@
       "sha256": "b448b325567d2ddb221294b21370d38b8b93fe7d3b851cd4907947462994e20b"
     },
     {
-      "path": "src\\record-schema.ts",
-      "sha256": "b1641d4b958eafd07e86d2c883f2fd235aaebb8361147b148bba621bea52473d"
+      "path": "src/record-schema.ts",
+      "sha256": "dcc5f0e4bc22f02aeb69df0c728b182808dc34ebf1ae068020f271b48466aa73"
     },
     {
       "path": "src\\report.ts",
       "sha256": "97b723a776a2c00f376a2680fc9a6132766847f5d8f6bc323fcb23087e59fa3c"
     },
     {
-      "path": "src\\simulation.ts",
-      "sha256": "aace6d949e119868b9c2c8967c2af7369b19adb380200d6170891d56395357f2"
+      "path": "src/simulation.ts",
+      "sha256": "fb7c129787b6df02189f2233a0a9fecaa53b5e914f4d654ad6e951c056fc69a7"
+    },
+    {
+      "path": "src/source-account.ts",
+      "sha256": "ec7c43238e07e030fb8c470d03670c89dce56f7935543e419d0150013ba7ee5b"
+      "sha256": "258f241854a08db7eb9e20d50c0f5941fd54cdea1c63f73c2ccc9864d3ebfe90"
     },
     {
       "path": "src\\threshold.ts",

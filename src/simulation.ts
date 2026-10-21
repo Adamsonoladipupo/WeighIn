@@ -74,6 +74,11 @@ export interface ComputeProvenance {
   seed: number[];
   auth_mode: string;
   host_features: string[];
+  /** Public key of the account that invoked the measured transaction.
+   *  Absent only in records produced before source-account identity was
+   *  recorded; comparisons require both sides to agree on it.
+   */
+  source_account?: string;
   /** Schema 4: audited resource caps only, excluding fee settings and metadata. */
   resource_limits_sha256?: string;
 }
@@ -1107,6 +1112,7 @@ export async function measureInvocation(
         seed: input.seed,
         auth_mode: output.auth_mode,
         host_features: output.host_features,
+        source_account: transaction.source,
       },
     };
   }
@@ -1122,42 +1128,3 @@ export async function measureInvocation(
   };
   throw exhaustionError;
 }
-
-
-
-import { validateSha256Digest, verifyProvenanceRegistryPair, ProvenanceRegistryEntry } from './diff';
-
-export interface ComputeProvenance {
-  producer: string;
-  source: string;
-  version: string;
-  protocol_version: string;
-  resource_limits_sha256: string;
-  input_hash: string;
-  network_header_snapshot_sha256: string;
-}
-
-export async function measureInvocation(provenance: ComputeProvenance, eventVolumeBytes: number): Promise<{ valid: boolean; report: string }> {
-  validateSha256Digest(provenance.resource_limits_sha256, 'resource_limits_sha256');
-  validateSha256Digest(provenance.input_hash, 'input_hash');
-  validateSha256Digest(provenance.network_header_snapshot_sha256, 'network_header_snapshot_sha256');
-
-  const entry: ProvenanceRegistryEntry = {
-    producer: provenance.producer,
-    source: provenance.source,
-    version: provenance.version,
-    protocolVersion: provenance.protocol_version
-  };
-
-  if (!verifyProvenanceRegistryPair(entry)) {
-    return { valid: false, report: 'Rejected due to unsupported provenance source/version combination.' };
-  }
-
-  const MAX_LIMIT = 64 * 1024 * 1024;
-  if (eventVolumeBytes > MAX_LIMIT) {
-    return { valid: false, report: 'Over-limit failure recorded honestly: event volume exceeds protocol cap.' };
-  }
-
-  return { valid: true, report: 'Invocation measured successfully within cap boundaries.' };
-}
-
