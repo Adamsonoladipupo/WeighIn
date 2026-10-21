@@ -149,7 +149,7 @@ async function buildWorkspace(label, overrideCalleeSource) {
 }
 
 function contractAddressOf(scAddress) {
-  if (scAddress.switch().name !== 'contract') throw new Error(`unexpected ScAddress ${scAddress.switch().name}`);
+  if (scAddress.switch().name !== 'scAddressTypeContract') throw new Error(`unexpected ScAddress ${scAddress.switch().name}`);
   return StrKey.encodeContract(scAddress.contractId());
 }
 
@@ -184,13 +184,14 @@ function chargedEvents(output) {
 }
 
 async function measure(label, build, keyFile, calleeAddress) {
-  const callee = materializeFixture('callee-fixtures.json', {}, `callee-${label}.json`);
+  const buildDir = path.basename(build.dir);
+  const callee = materializeFixture('callee-fixtures.json', { '{{NESTED_BUILD_DIR}}': buildDir }, `callee-${label}.json`);
   const calleeRecords = await runMeasurement({
     fixturesPath: callee.path, keyFile, rpcUrl: endpoint, helperPath: helper,
     gitCommit: `nested-${label}`, sdkVersion: '28.0.0',
   });
   const address = calleeAddress || calleeRecords[0].contract_id;
-  const caller = materializeFixture('caller-fixtures.json', { '{{NESTED_CALLEE_ADDRESS}}': address }, `caller-${label}.json`);
+  const caller = materializeFixture('caller-fixtures.json', { '{{NESTED_BUILD_DIR}}': buildDir, '{{NESTED_CALLEE_ADDRESS}}': address }, `caller-${label}.json`);
   const callerRecords = await runMeasurement({
     fixturesPath: caller.path, keyFile, rpcUrl: endpoint, helperPath: helper,
     gitCommit: `nested-${label}`, sdkVersion: '28.0.0',
@@ -307,8 +308,8 @@ async function main() {
   const calleeEvents = chargedEvents(calleeReplay.output);
   assert.equal(nestedEvents.length, 2);
   assert.equal(nestedEvents[0].toXDR('base64'), calleeEvents[0].toXDR('base64'), 'callee event preserved inside the nested transaction');
-  assert.equal(contractAddressOf(nestedEvents[0].body().v0().contractID()), calleeContract);
-  assert.equal(contractAddressOf(nestedEvents[1].body().v0().contractID()), callerContract);
+  assert.equal(StrKey.encodeContract(nestedEvents[0].contractId()), calleeContract);
+  assert.equal(StrKey.encodeContract(nestedEvents[1].contractId()), callerContract);
   assert.equal(nested.metrics.events_count.consumed, 2);
   assert.equal(nested.metrics.events_count.limit, null);
   assert.match(nested.metrics.events_count.limit_reason, /no independent/);
@@ -379,7 +380,7 @@ async function main() {
 
   // Failure probes: application failure, invalid input, infrastructure failure
   // and the archived-state control are recorded with their exact diagnostics.
-  const failureSpec = materializeFixture('caller-failure-fixtures.json', { '{{NESTED_CALLEE_ADDRESS}}': calleeContract }, 'caller-failure.json');
+  const failureSpec = materializeFixture('caller-failure-fixtures.json', { '{{NESTED_BUILD_DIR}}': 'build-base', '{{NESTED_CALLEE_ADDRESS}}': calleeContract }, 'caller-failure.json');
   let applicationFailure;
   try {
     await runMeasurement({ fixturesPath: failureSpec.path, keyFile: keyA, rpcUrl: endpoint, helperPath: helper, gitCommit: 'nested-app-failure', sdkVersion: '28.0.0' });
@@ -389,7 +390,7 @@ async function main() {
     assert.match(error.message, /^Simulation failed for run_failing/);
   }
   let invalidInput;
-  const invalidSpec = materializeFixture('caller-fixtures.json', { '{{NESTED_CALLEE_ADDRESS}}': 'CNOTAREALCONTRACTADDRESS' }, 'caller-invalid.json');
+  const invalidSpec = materializeFixture('caller-fixtures.json', { '{{NESTED_BUILD_DIR}}': 'build-base', '{{NESTED_CALLEE_ADDRESS}}': 'CNOTAREALCONTRACTADDRESS' }, 'caller-invalid.json');
   try {
     await runMeasurement({ fixturesPath: invalidSpec.path, keyFile: keyA, rpcUrl: endpoint, helperPath: helper, gitCommit: 'nested-invalid-input', sdkVersion: '28.0.0' });
     throw new Error('invalid input was not raised');
@@ -402,9 +403,13 @@ async function main() {
     assert.match(error.message, /Invalid value for address/);
     assert.equal(invalidInput.detected_before_simulation, true);
   }
+  // Infrastructure failure must be raised after a successful RPC simulation:
+  // a failing invocation never reaches native helper provisioning, so the
+  // missing-helper probe uses the successful nested caller fixture.
   let infrastructureFailure;
+  const infrastructureSpec = materializeFixture('caller-fixtures.json', { '{{NESTED_BUILD_DIR}}': 'build-base', '{{NESTED_CALLEE_ADDRESS}}': calleeContract }, 'caller-infrastructure.json');
   try {
-    await runMeasurement({ fixturesPath: failureSpec.path, keyFile: keyA, rpcUrl: endpoint, helperPath: path.join(temporary, 'missing-helper'), gitCommit: 'nested-infrastructure', sdkVersion: '28.0.0' });
+    await runMeasurement({ fixturesPath: infrastructureSpec.path, keyFile: keyA, rpcUrl: endpoint, helperPath: path.join(temporary, 'missing-helper'), gitCommit: 'nested-infrastructure', sdkVersion: '28.0.0' });
     throw new Error('infrastructure failure was not raised');
   } catch (error) {
     infrastructureFailure = { message: String(error.message), classification: 'infrastructure_failure' };

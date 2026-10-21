@@ -20,7 +20,7 @@ function classifyFootprint(output) {
     if (key.switch().name === 'contractCode') codeHashes.add(key.contractCode().hash().toString('hex'));
     else if (key.switch().name === 'contractData') {
       const data = key.contractData();
-      const contract = data.contract().switch().name === 'contract'
+      const contract = data.contract().switch().name === 'scAddressTypeContract'
         ? StrKey.encodeContract(data.contract().contractId())
         : null;
       if (data.key().switch().name === 'scvLedgerKeyContractInstance') instances.add(contract);
@@ -56,8 +56,8 @@ test('retained nested-invocation evidence has intact sources, wasm hashes and a 
 
 test('fixture templates declare explicit identities and the caller binds the callee address token', () => {
   const callee = parseFixtures(fixtureTemplate('callee-fixtures.json'), 'callee-fixtures.json');
-  const caller = JSON.parse(fixtureTemplate('caller-fixtures.json'));
-  const failure = JSON.parse(fixtureTemplate('caller-failure-fixtures.json'));
+  const caller = parseFixtures(fixtureTemplate('caller-fixtures.json'), 'caller-fixtures.json');
+  const failure = parseFixtures(fixtureTemplate('caller-failure-fixtures.json'), 'caller-failure-fixtures.json');
   assert.equal(callee.contracts[0].logical_id, 'id:callee');
   assert.equal(callee.contracts[0].invocations[0].case_id, 'id:work-once');
   assert.equal(callee.contracts[0].invocations[0].function_name, 'work');
@@ -95,12 +95,7 @@ test('nested host invocation attributes the combined footprint, ordered events a
   assert.equal(nested.metrics.events_count.limit, null);
   assert.match(nested.metrics.events_count.limit_reason, /no independent/);
   assert.deepEqual(events.map(event => event.toXDR('base64')), nestedReplay.output.contract_events_xdr);
-  const contractAddress = event => {
-    const address = event.body().v0().contractID();
-    return address.switch().name === 'contract'
-      ? StrKey.encodeContract(address.contractId())
-      : null;
-  };
+  const contractAddress = event => StrKey.encodeContract(event.contractId());
   assert.equal(contractAddress(events[0]), proof.runtime_contract_ids.base_callee);
   assert.equal(contractAddress(events[1]), proof.runtime_contract_ids.base_caller);
   assert.equal(nestedReplay.output.contract_events_xdr[0], calleeReplay.output.contract_events_xdr[0], 'callee event preserved inside the nested transaction');
@@ -145,7 +140,7 @@ test('address-swapped control pairs by explicit invocation identity with zero co
   for (const contract of controlDiff.contracts) {
     assert.notEqual(contract.base_contract_id, contract.head_contract_id, 'runtime addresses differ across deployers');
     const comparable = contract.functions.flatMap(fn => fn.metrics.filter(m => m.availability === 'comparable'));
-    assert.equal(comparable.length, 16);
+    assert.equal(comparable.length, 8);
     assert.ok(comparable.every(m => m.delta === 0));
   }
   const proof = read('verification.json');

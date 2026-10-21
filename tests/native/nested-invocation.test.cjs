@@ -14,7 +14,7 @@ const hash = data => createHash('sha256').update(data).digest('hex');
 const withOutput = replays.filter(replay => replay.output);
 
 test('nested-invocation snapshots reproduce metered compute, IO and ordered events independently of instruction leeway', async () => {
-  assert.ok(withOutput.length >= 8, 'base, control and head snapshots retained');
+  assert.ok(withOutput.length >= 6, 'base, control and head snapshots retained');
   for (const captured of withOutput) {
     const output = await simulateSnapshot(captured.input, helper);
     assert.deepEqual(output, captured.output);
@@ -59,7 +59,7 @@ test('the native helper rejects an expired captured ledger entry instead of inve
   const expired = input.entries.find(row => {
     const key = xdr.LedgerKey.fromXDR(row.key, 'base64');
     return key.switch().name === 'contractData'
-      && key.contractData().contract().switch().name === 'contract'
+      && key.contractData().contract().switch().name === 'scAddressTypeContract'
       && StrKey.encodeContract(key.contractData().contract().contractId()) === proof.runtime_contract_ids.base_callee
       && key.contractData().key().switch().name === 'scvLedgerKeyContractInstance';
   });

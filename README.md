@@ -244,6 +244,9 @@ Evidence conclusions are bounded by the recorded environment.
 [Hosted Soroban Forge validation](docs/hosted-soroban-forge.md) additionally proves
 one real escrow query: changed WASM/address pairing, +14,234 CPU and verified
 strict-policy failure in a permitted isolated fork.
+[Cross-contract nested invocation attribution](docs/nested-invocation.md) proves a
+real caller→callee host call charging one combined footprint with per-contract
+event and return attribution.
 
 ## Known Limitations
 

@@ -3,7 +3,7 @@
   "contracts": [
     {
       "id": "callee",
-      "wasm_path": "../build-base/wasm/nested_callee.wasm",
+      "wasm_path": "{{NESTED_BUILD_DIR}}/wasm/nested_callee.wasm",
       "invocations": [
         {
           "id": "work-once",

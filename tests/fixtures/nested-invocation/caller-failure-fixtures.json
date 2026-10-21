@@ -3,7 +3,7 @@
   "contracts": [
     {
       "id": "caller",
-      "wasm_path": "../build-base/wasm/nested_caller.wasm",
+      "wasm_path": "{{NESTED_BUILD_DIR}}/wasm/nested_caller.wasm",
       "invocations": [
         {
           "id": "nested-failure",
