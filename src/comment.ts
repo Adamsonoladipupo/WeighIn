@@ -364,11 +364,7 @@ export function renderComment(
       lines.push("|---|---|---|---|---|---|---|");
       for (const m of agg.metrics) {
         const status =
-          m.availability === "unavailable"
-            ? "⚪"
-            : m.regression
-              ? "🔴"
-              : "🟢";
+          m.availability === "unavailable" ? "⚪" : m.regression ? "🔴" : "🟢";
         const baseStr =
           m.base_consumed === null
             ? "Unavailable"
