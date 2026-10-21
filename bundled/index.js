@@ -35813,6 +35813,19 @@ function validateBenchmarkComparisonCompatibility(baseFn, headFn) {
 }
 
 // src/diff.ts
+var AGGREGATE_METRIC_DESCRIPTIONS = {
+  cpu_instructions: "Cumulative CPU Instructions",
+  memory_bytes: "Cumulative Invocation Memory Bytes (sum of invocation costs, not peak concurrent memory)",
+  ledger_read_entries: "Cumulative Footprint Read Entries (RO + RW)",
+  ledger_read_bytes: "Cumulative Disk Read Bytes",
+  ledger_write_entries: "Cumulative Write Footprint Entries",
+  ledger_write_bytes: "Cumulative Ledger Write Bytes",
+  historical_data_read_bytes: "Cumulative Historical Read Bytes",
+  contract_data_hard_limit: "Cumulative Contract Data (instance)",
+  tx_size_bytes: "Cumulative Tx Size Bytes",
+  events_count: "Cumulative Successful Contract/System Events",
+  event_data_bytes: "Cumulative Events + Return XDR Bytes"
+};
 function diffMetrics(base, head) {
   return METRIC_KEYS.map((key) => {
     const b = base[key];
@@ -35911,7 +35924,237 @@ function contractMap(contracts) {
 function contractLabel(contract) {
   return contract.logical_id === void 0 ? contract.contract_id : `${contract.fixture_id} / ${contract.logical_id}`;
 }
-function diffBenchmarks(base, head) {
+function matchesSelector(selector, candidate) {
+  if (selector.function_name !== candidate.function_name) return false;
+  if (selector.fixture_id !== void 0 && selector.fixture_id !== candidate.fixture_id)
+    return false;
+  if (selector.logical_id !== void 0 && selector.logical_id !== candidate.logical_id)
+    return false;
+  if (selector.case_id !== void 0 && selector.case_id !== candidate.case_id)
+    return false;
+  return true;
+}
+function formatSelector(sel) {
+  const parts = [];
+  if (sel.fixture_id) parts.push(`fixture:${sel.fixture_id}`);
+  if (sel.logical_id) parts.push(`contract:${sel.logical_id}`);
+  parts.push(`fn:${sel.function_name}`);
+  if (sel.case_id) parts.push(`case:${sel.case_id}`);
+  return parts.join(" / ");
+}
+function computeAggregateDiffs(diff, config2) {
+  if (!config2) return [];
+  const aggregateNames = /* @__PURE__ */ new Set();
+  if (config2.aggregates) {
+    for (const name of Object.keys(config2.aggregates)) aggregateNames.add(name);
+  }
+  if (config2.limits?.aggregates) {
+    for (const name of Object.keys(config2.limits.aggregates))
+      aggregateNames.add(name);
+  }
+  if (config2.thresholds?.aggregates) {
+    for (const name of Object.keys(config2.thresholds.aggregates))
+      aggregateNames.add(name);
+  }
+  if (aggregateNames.size === 0) return [];
+  const aggregateDiffs = [];
+  for (const name of aggregateNames) {
+    const aggDef = config2.aggregates?.[name];
+    if (!aggDef || !aggDef.members || !Array.isArray(aggDef.members) || aggDef.members.length === 0) {
+      throw new Error(
+        `Cannot evaluate aggregate budget "${name}": missing required member selectors in [aggregates.${name}]`
+      );
+    }
+    const seenSelectors = /* @__PURE__ */ new Set();
+    for (const member of aggDef.members) {
+      if (!member.function_name) {
+        throw new Error(
+          `Cannot evaluate aggregate budget "${name}": member selector missing required function_name`
+        );
+      }
+      const selKey = JSON.stringify([
+        member.fixture_id ?? "",
+        member.logical_id ?? "",
+        member.function_name,
+        member.case_id ?? ""
+      ]);
+      if (seenSelectors.has(selKey)) {
+        throw new Error(
+          `Cannot evaluate aggregate budget "${name}": duplicate member selector ${formatSelector(member)}`
+        );
+      }
+      seenSelectors.add(selKey);
+    }
+    const resolvedMembers = [];
+    const matchedCanonicalKeys = /* @__PURE__ */ new Set();
+    for (const member of aggDef.members) {
+      const matches = [];
+      for (const contract2 of diff.contracts) {
+        for (const fn2 of contract2.functions) {
+          if (matchesSelector(member, {
+            fixture_id: contract2.fixture_id,
+            logical_id: contract2.logical_id,
+            function_name: fn2.function_name,
+            case_id: fn2.case_id
+          })) {
+            matches.push({ contract: contract2, fn: fn2 });
+          }
+        }
+      }
+      if (matches.length === 0) {
+        throw new Error(
+          `Cannot evaluate aggregate budget "${name}": member ${formatSelector(member)} has no matched BASE/HEAD benchmark`
+        );
+      }
+      if (matches.length > 1) {
+        throw new Error(
+          `Cannot evaluate aggregate budget "${name}": member ${formatSelector(member)} is ambiguous (matched ${matches.length} benchmarks)`
+        );
+      }
+      const { contract, fn } = matches[0];
+      const canonicalKey = JSON.stringify([
+        contract.fixture_id ?? "",
+        contract.logical_id ?? "",
+        fn.function_name,
+        fn.case_id ?? ""
+      ]);
+      if (matchedCanonicalKeys.has(canonicalKey)) {
+        throw new Error(
+          `Cannot evaluate aggregate budget "${name}": duplicate member detected for benchmark "${contract.logical_id ?? contract.contract_id} / ${fn.function_name}${fn.case_id ? ` / ${fn.case_id}` : ""}"`
+        );
+      }
+      matchedCanonicalKeys.add(canonicalKey);
+      resolvedMembers.push({ selector: member, contract, fn, canonicalKey });
+    }
+    let commonSource;
+    let commonProtocol;
+    let commonNetwork;
+    let commonComputeConfig;
+    let commonLimitsConfig;
+    for (const { fn } of resolvedMembers) {
+      const prov = fn.head_provenance;
+      if (!prov) continue;
+      if (commonSource === void 0) {
+        commonSource = prov.source;
+        commonProtocol = prov.protocol;
+        commonNetwork = prov.network_id;
+        commonComputeConfig = prov.compute_config_sha256;
+        commonLimitsConfig = prov.resource_limits_sha256;
+      } else {
+        if (prov.source !== commonSource) {
+          throw new Error(
+            `Cannot evaluate aggregate budget "${name}": incompatible measurement environments across members (mismatched meter source: ${commonSource} vs ${prov.source})`
+          );
+        }
+        if (prov.protocol !== commonProtocol) {
+          throw new Error(
+            `Cannot evaluate aggregate budget "${name}": incompatible measurement environments across members (mismatched protocol: ${commonProtocol} vs ${prov.protocol})`
+          );
+        }
+        if (prov.network_id !== commonNetwork) {
+          throw new Error(
+            `Cannot evaluate aggregate budget "${name}": incompatible measurement environments across members (mismatched network: ${commonNetwork} vs ${prov.network_id})`
+          );
+        }
+        if (prov.compute_config_sha256 !== commonComputeConfig) {
+          throw new Error(
+            `Cannot evaluate aggregate budget "${name}": incompatible measurement environments across members (mismatched compute configuration / calibration)`
+          );
+        }
+        if (prov.resource_limits_sha256 !== commonLimitsConfig) {
+          throw new Error(
+            `Cannot evaluate aggregate budget "${name}": incompatible measurement environments across members (mismatched resource limits configuration)`
+          );
+        }
+      }
+    }
+    const breakdown = {};
+    const metrics = [];
+    for (const key of METRIC_KEYS) {
+      const memberRows = [];
+      let allComparable = true;
+      let unavailableReason;
+      let baseSum = 0;
+      let headSum = 0;
+      for (const { contract, fn } of resolvedMembers) {
+        const mDiff = fn.metrics.find((m) => m.key === key);
+        const baseVal = mDiff?.base.consumed ?? null;
+        const headVal = mDiff?.head.consumed ?? null;
+        const delta = mDiff?.delta ?? (baseVal !== null && headVal !== null ? headVal - baseVal : null);
+        memberRows.push({
+          fixture_id: contract.fixture_id,
+          logical_id: contract.logical_id,
+          contract_id: contract.head_contract_id || contract.contract_id,
+          function_name: fn.function_name,
+          case_id: fn.case_id,
+          base_consumed: baseVal,
+          head_consumed: headVal,
+          delta
+        });
+        if (!mDiff || mDiff.availability === "unavailable" || baseVal === null || headVal === null) {
+          allComparable = false;
+          if (!unavailableReason) {
+            unavailableReason = `Member ${contract.logical_id ?? contract.contract_id} / ${fn.function_name}${fn.case_id ? ` / ${fn.case_id}` : ""} ${key} is unavailable: ${mDiff?.reason ?? "measured value unavailable"}`;
+          }
+        } else {
+          baseSum += baseVal;
+          headSum += headVal;
+        }
+      }
+      breakdown[key] = memberRows;
+      if (!allComparable) {
+        metrics.push({
+          key,
+          base_consumed: null,
+          head_consumed: null,
+          delta: null,
+          pct: null,
+          regression: false,
+          availability: "unavailable",
+          reason: unavailableReason,
+          description: AGGREGATE_METRIC_DESCRIPTIONS[key]
+        });
+      } else {
+        const delta = headSum - baseSum;
+        const regression = delta > 0;
+        const pct = baseSum === 0 ? delta > 0 ? null : 0 : delta / baseSum * 100;
+        metrics.push({
+          key,
+          base_consumed: baseSum,
+          head_consumed: headSum,
+          delta,
+          pct,
+          regression,
+          availability: "comparable",
+          description: AGGREGATE_METRIC_DESCRIPTIONS[key]
+        });
+      }
+    }
+    const hasRegression = metrics.some((m) => m.regression);
+    const provenance = commonSource ? {
+      source: commonSource,
+      protocol_version: commonProtocol ?? 0,
+      network_passphrase: commonNetwork ?? "",
+      compute_config_sha256: commonComputeConfig
+    } : void 0;
+    aggregateDiffs.push({
+      name,
+      description: aggDef.description,
+      members: aggDef.members,
+      member_count: resolvedMembers.length,
+      breakdown,
+      metrics,
+      provenance,
+      hasRegression
+    });
+  }
+  diff.aggregates = aggregateDiffs;
+  if (aggregateDiffs.some((a) => a.hasRegression)) {
+    diff.hasRegression = true;
+  }
+  return aggregateDiffs;
+}
+function diffBenchmarks(base, head, config2) {
   const baseMap = contractMap(base);
   const headMap = contractMap(head);
   if (base.length > 0 && head.length > 0 && base[0].schema_version !== void 0 && head[0].schema_version !== void 0 && base[0].schema_version !== head[0].schema_version) {
@@ -35952,12 +36195,16 @@ function diffBenchmarks(base, head) {
       hasRegression
     });
   }
-  return {
+  const diff = {
     contracts,
     hasRegression: contracts.some((c) => c.hasRegression),
     newContracts,
     removedContracts
   };
+  if (config2) {
+    computeAggregateDiffs(diff, config2);
+  }
+  return diff;
 }
 
 // src/config.ts
@@ -35989,15 +36236,30 @@ var FunctionThresholdsSchema = external_exports.record(
   external_exports.enum(METRIC_KEYS),
   RuleValueSchema
 );
+var BenchmarkSelectorSchema = external_exports.object({
+  fixture_id: external_exports.string().min(1).optional(),
+  logical_id: external_exports.string().min(1).optional(),
+  function_name: external_exports.string().min(1),
+  case_id: external_exports.string().min(1).optional()
+}).strict();
+var AggregateBudgetConfigSchema = external_exports.object({
+  description: external_exports.string().optional(),
+  members: external_exports.array(BenchmarkSelectorSchema).min(1),
+  limits: external_exports.record(external_exports.enum(METRIC_KEYS), external_exports.number().nonnegative()).optional(),
+  thresholds: external_exports.record(external_exports.enum(METRIC_KEYS), RuleValueSchema).optional()
+}).strict();
 var WeighinConfigSchema = external_exports.object({
   thresholds: external_exports.object({
     global: GlobalThresholdsSchema.optional(),
-    functions: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional()
+    functions: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional(),
+    aggregates: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional()
   }).strict().optional(),
   limits: external_exports.object({
     global: GlobalLimitsSchema.optional(),
-    functions: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional()
-  }).strict().optional()
+    functions: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional(),
+    aggregates: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional()
+  }).strict().optional(),
+  aggregates: external_exports.record(external_exports.string(), AggregateBudgetConfigSchema).optional()
 }).strict();
 var U64_MAX = 18446744073709551615n;
 var I64_MIN = -9223372036854775808n;
@@ -54335,8 +54597,9 @@ async function isContractDeployed(server, contractId) {
         `Deployment probe returned a malformed entry for ${contractId}: ${JSON.stringify(entry)}`
       );
     }
-    const entryKey = typeof entry.key === "string" ? entry.key : void 0;
-    const entryXdr = typeof entry.xdr === "string" ? entry.xdr : void 0;
+    const entryKey = typeof entry.key === "string" ? entry.key : typeof entry.key?.toXDR === "function" ? entry.key.toXDR("base64") : void 0;
+    const entryValue = entry.xdr ?? entry.val;
+    const entryXdr = typeof entryValue === "string" ? entryValue : typeof entryValue?.toXDR === "function" ? entryValue.toXDR("base64") : void 0;
     if (typeof entryKey !== "string" || typeof entryXdr !== "string") {
       throw new Error(
         `Deployment probe returned a missing key/xdr payload for ${contractId}: ${JSON.stringify(entry)}`
@@ -54603,7 +54866,6 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
   }
   return results;
 }
-var MAX_PROTOCOL_EVENT_BYTES = 64 * 1024 * 1024;
 
 // src/threshold.ts
 var TOML = __toESM(require_toml());
@@ -54619,10 +54881,23 @@ var ruleSchema = external_exports.union([
 var metricRules = external_exports.object(
   Object.fromEntries(METRIC_KEYS.map((key) => [key, ruleSchema.optional()]))
 ).strict();
+var benchmarkSelectorSchema = external_exports.object({
+  fixture_id: external_exports.string().min(1).optional(),
+  logical_id: external_exports.string().min(1).optional(),
+  function_name: external_exports.string().min(1),
+  case_id: external_exports.string().min(1).optional()
+}).strict();
+var aggregateBudgetConfigSchema = external_exports.object({
+  description: external_exports.string().optional(),
+  members: external_exports.array(benchmarkSelectorSchema).min(1),
+  limits: external_exports.record(external_exports.enum(METRIC_KEYS), percentage).optional(),
+  thresholds: metricRules.optional()
+}).strict();
 var configSchema = external_exports.object({
   limits: external_exports.object({
     global: external_exports.record(external_exports.enum(METRIC_KEYS), percentage).optional(),
-    functions: external_exports.record(external_exports.string().min(1), external_exports.record(external_exports.enum(METRIC_KEYS), percentage)).optional()
+    functions: external_exports.record(external_exports.string().min(1), external_exports.record(external_exports.enum(METRIC_KEYS), percentage)).optional(),
+    aggregates: external_exports.record(external_exports.string().min(1), external_exports.record(external_exports.enum(METRIC_KEYS), percentage)).optional()
   }).strict().optional(),
   thresholds: external_exports.object({
     global: external_exports.object({
@@ -54630,8 +54905,10 @@ var configSchema = external_exports.object({
       max_allowed_cpu_increase_pct: percentage.optional(),
       max_allowed_memory_increase_pct: percentage.optional()
     }).strict().optional(),
-    functions: external_exports.record(external_exports.string().min(1), metricRules).optional()
-  }).strict().optional()
+    functions: external_exports.record(external_exports.string().min(1), metricRules).optional(),
+    aggregates: external_exports.record(external_exports.string().min(1), metricRules).optional()
+  }).strict().optional(),
+  aggregates: external_exports.record(external_exports.string().min(1), aggregateBudgetConfigSchema).optional()
 }).strict();
 function validateConfig(value) {
   const parsed = configSchema.safeParse(value);
@@ -54714,12 +54991,106 @@ var GLOBAL_RULE_MAP = [
 ];
 function enforceThresholds(diff, config2) {
   if (config2 !== null) config2 = validateConfig(config2);
-  if (!config2?.thresholds && !config2?.limits) return [];
+  if (!config2?.thresholds && !config2?.limits && !config2?.aggregates) return [];
   const global2 = config2?.thresholds?.global ?? {};
   const perFunction = config2?.thresholds?.functions ?? {};
   const globalLimits = config2?.limits?.global ?? {};
   const functionLimits = config2?.limits?.functions ?? {};
   const violations = [];
+  const hasAggregatesConfig = Boolean(config2?.aggregates && Object.keys(config2.aggregates).length > 0) || Boolean(
+    config2?.limits?.aggregates && Object.keys(config2.limits.aggregates).length > 0
+  ) || Boolean(
+    config2?.thresholds?.aggregates && Object.keys(config2.thresholds.aggregates).length > 0
+  );
+  if (hasAggregatesConfig) {
+    if (!diff.aggregates) {
+      computeAggregateDiffs(diff, config2);
+    }
+    const aggregateLimits = config2?.limits?.aggregates ?? {};
+    const aggregateThresholds = config2?.thresholds?.aggregates ?? {};
+    for (const aggDiff of diff.aggregates ?? []) {
+      const name = aggDiff.name;
+      const aggConfig = config2?.aggregates?.[name];
+      const limits = { ...aggConfig?.limits, ...aggregateLimits[name] };
+      const thresholds = {
+        ...aggConfig?.thresholds,
+        ...aggregateThresholds[name]
+      };
+      for (const [metricKeyStr, limit] of Object.entries(limits)) {
+        const metricKey = metricKeyStr;
+        if (limit === void 0) continue;
+        const aggMetric = aggDiff.metrics.find((m) => m.key === metricKey);
+        if (!aggMetric || aggMetric.availability === "unavailable" || aggMetric.head_consumed === null) {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: null,
+            pct: null,
+            rule: `absolute_limit(${limit})`,
+            rule_source: `aggregates.${name}.limits.${metricKey}`,
+            message: `${metricKey} unavailable; cannot evaluate configured aggregate absolute limit: ${aggMetric?.reason ?? "measured value unavailable"}`
+          });
+        } else if (aggMetric.head_consumed > limit) {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: aggMetric.head_consumed - limit,
+            pct: null,
+            rule: `absolute_limit(${limit})`,
+            rule_source: `aggregates.${name}.limits.${metricKey}`,
+            message: `${metricKey} exceeded aggregate absolute limit: limit ${limit}, actual ${aggMetric.head_consumed}`
+          });
+        }
+      }
+      for (const [metricKeyStr, rule] of Object.entries(thresholds)) {
+        const metricKey = metricKeyStr;
+        if (rule === void 0) continue;
+        const ruleStr = typeof rule === "number" ? `allow_${rule}_percent_increase` : rule;
+        if (ruleStr === "ignore") continue;
+        const aggMetric = aggDiff.metrics.find((m) => m.key === metricKey);
+        if (!aggMetric || aggMetric.availability === "unavailable") {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: null,
+            pct: null,
+            rule: ruleStr,
+            rule_source: `aggregates.${name}.thresholds.${metricKey}`,
+            message: `${metricKey} unavailable; cannot evaluate configured aggregate policy: ${aggMetric?.reason ?? "measured value unavailable"}`
+          });
+          continue;
+        }
+        if (!aggMetric.regression) continue;
+        if (ruleStr === "strict_zero_tolerance") {
+          violations.push({
+            aggregate_id: name,
+            metric: metricKey,
+            delta: aggMetric.delta,
+            pct: aggMetric.pct,
+            rule: ruleStr,
+            rule_source: `aggregates.${name}.thresholds.${metricKey}`,
+            message: `${metricKey} increased by ${aggMetric.delta} (strict zero tolerance)`
+          });
+          continue;
+        }
+        const allowedPct = typeof rule === "number" ? rule : parseAllowPct(ruleStr);
+        if (allowedPct !== null) {
+          if (aggMetric.pct === null || aggMetric.pct > allowedPct) {
+            const pctStr = aggMetric.pct === null ? "Infinity" : aggMetric.pct.toFixed(2);
+            violations.push({
+              aggregate_id: name,
+              metric: metricKey,
+              delta: aggMetric.delta,
+              pct: aggMetric.pct,
+              rule: ruleStr,
+              rule_source: `aggregates.${name}.thresholds.${metricKey}`,
+              message: `${metricKey} increased by ${pctStr}% (limit ${allowedPct}%)`
+            });
+          }
+        }
+      }
+    }
+  }
   const comparedNames = new Set(
     diff.contracts.flatMap(
       (contract) => contract.functions.map((fn) => fn.function_name)
@@ -55038,7 +55409,7 @@ function compareFunctions(a, b) {
   return compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id);
 }
 function compareViolations(a, b) {
-  return compareCodePoints(a.fixture_id, b.fixture_id) || compareCodePoints(a.logical_id, b.logical_id) || compareCodePoints(a.contract_id, b.contract_id) || compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id) || compareCodePoints(a.metric, b.metric);
+  return compareCodePoints(a.aggregate_id, b.aggregate_id) || compareCodePoints(a.fixture_id, b.fixture_id) || compareCodePoints(a.logical_id, b.logical_id) || compareCodePoints(a.contract_id, b.contract_id) || compareCodePoints(a.function_name, b.function_name) || compareCodePoints(a.case_id, b.case_id) || compareCodePoints(a.metric, b.metric);
 }
 function renderComment(diff, violations, baseRef, headSha, policyOrigin) {
   const lines = [];
@@ -55093,14 +55464,89 @@ function renderComment(diff, violations, baseRef, headSha, policyOrigin) {
     lines.push("### \u274C Violations");
     lines.push("");
     for (const v of sortedViolations) {
-      const measured = diff.contracts.find((c) => contractLabel(c) === contractLabel(v))?.functions.find(
-        (fn) => fn.function_name === v.function_name && fn.case_id === v.case_id
-      )?.metrics.find((m) => m.key === v.metric);
-      lines.push(
-        `- **\`${contractLabel(v)} / ${benchmarkLabel(v)}\` / ${measured ? metricLabel(measured) : METRIC_LABELS[v.metric]}**: ${v.message}`
-      );
+      if (v.aggregate_id) {
+        lines.push(
+          `- **\`Aggregate: ${v.aggregate_id}\` / ${METRIC_LABELS[v.metric]}**: ${v.message}`
+        );
+      } else {
+        const measured = diff.contracts.find((c) => contractLabel(c) === contractLabel(v))?.functions.find(
+          (fn) => fn.function_name === v.function_name && fn.case_id === v.case_id
+        )?.metrics.find((m) => m.key === v.metric);
+        lines.push(
+          `- **\`${contractLabel(v)} / ${benchmarkLabel(v)}\` / ${measured ? metricLabel(measured) : METRIC_LABELS[v.metric]}**: ${v.message}`
+        );
+      }
     }
     lines.push("");
+  }
+  if (diff.aggregates && diff.aggregates.length > 0) {
+    lines.push("### Aggregate Resource Budgets");
+    lines.push("");
+    for (const agg of diff.aggregates) {
+      lines.push(
+        `#### \`Aggregate: ${agg.name}\` (${agg.member_count} member${agg.member_count === 1 ? "" : "s"})`
+      );
+      lines.push("");
+      if (agg.description) {
+        lines.push(`> ${agg.description}`);
+        lines.push("");
+      }
+      if (agg.provenance) {
+        lines.push(
+          `Compute source: ${agg.provenance.source}; protocol ${agg.provenance.protocol_version}; network \`${agg.provenance.network_passphrase}\`.`
+        );
+        lines.push("");
+      }
+      lines.push(
+        "| | Metric | Base (Sum) | Head (Sum) | Delta | Change | Semantic Unit |"
+      );
+      lines.push("|---|---|---|---|---|---|---|");
+      for (const m of agg.metrics) {
+        const status = m.availability === "unavailable" ? "\u26AA" : m.regression ? "\u{1F534}" : "\u{1F7E2}";
+        const baseStr = m.base_consumed === null ? "Unavailable" : m.base_consumed.toLocaleString("en-US");
+        const headStr = m.head_consumed === null ? "Unavailable" : m.head_consumed.toLocaleString("en-US");
+        const deltaStr = m.delta === null ? "Unavailable" : m.delta > 0 ? `+${m.delta.toLocaleString("en-US")}` : m.delta.toLocaleString("en-US");
+        const pctStr = m.pct === null ? m.delta !== null && m.delta > 0 ? "+Infinity%" : "0.0%" : `${m.pct >= 0 ? "+" : ""}${m.pct.toFixed(1)}%`;
+        lines.push(
+          `| ${status} | ${METRIC_LABELS[m.key]} | ${baseStr} | ${headStr} | ${deltaStr} | ${pctStr} | ${m.description} |`
+        );
+      }
+      lines.push("");
+      const unavailableMetrics = agg.metrics.filter(
+        (m) => m.availability === "unavailable"
+      );
+      if (unavailableMetrics.length > 0) {
+        for (const m of unavailableMetrics) {
+          lines.push(`- **${METRIC_LABELS[m.key]} unavailable**: ${m.reason}`);
+        }
+        lines.push("");
+      }
+      lines.push("<details><summary>Member breakdown</summary>");
+      lines.push("");
+      lines.push(
+        "| Member | Function | Case | CPU Instructions (Base \u2192 Head) | Memory Bytes (Base \u2192 Head) |"
+      );
+      lines.push("|---|---|---|---|---|");
+      for (let i = 0; i < agg.member_count; i++) {
+        const cpuRow = agg.breakdown.cpu_instructions[i];
+        const memRow = agg.breakdown.memory_bytes[i];
+        const memberName = cpuRow.logical_id ?? cpuRow.contract_id ?? `member-${i + 1}`;
+        const cpuBase = cpuRow.base_consumed !== null ? cpuRow.base_consumed.toLocaleString("en-US") : "Unavailable";
+        const cpuHead = cpuRow.head_consumed !== null ? cpuRow.head_consumed.toLocaleString("en-US") : "Unavailable";
+        const memBase = memRow.base_consumed !== null ? memRow.base_consumed.toLocaleString("en-US") : "Unavailable";
+        const memHead = memRow.head_consumed !== null ? memRow.head_consumed.toLocaleString("en-US") : "Unavailable";
+        lines.push(
+          `| \`${memberName}\` | \`${cpuRow.function_name}\` | \`${cpuRow.case_id ?? "default"}\` | ${cpuBase} \u2192 ${cpuHead} | ${memBase} \u2192 ${memHead} |`
+        );
+      }
+      lines.push("");
+      lines.push(
+        "> Note: Summed invocation memory reflects total allocation across sequential invocations, not peak concurrent memory."
+      );
+      lines.push("");
+      lines.push("</details>");
+      lines.push("");
+    }
   }
   const sortedNewContracts = [...diff.newContracts].sort(compareCodePoints);
   const sortedRemovedContracts = [...diff.removedContracts].sort(
@@ -56041,9 +56487,13 @@ Commit or stash changes before running benchmarks.`
     validatedDiffJson = JSON.stringify(diff);
     core3.info(`Violations: ${violations.length}`);
     for (const v of violations) {
-      core3.error(
-        `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`
-      );
+      if (v.aggregate_id) {
+        core3.error(`[aggregate: ${v.aggregate_id}] ${v.message}`);
+      } else {
+        core3.error(
+          `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`
+        );
+      }
     }
     core3.endGroup();
     const result = violations.length > 0 ? "fail" : "pass";
