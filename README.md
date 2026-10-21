@@ -19,8 +19,8 @@ These are Soroban simulation resources, not hardware performance or fee estimate
 ## How It Works
 
 ```text
-HEAD checkout (must have no uncommitted changes) + fetched BASE worktree
-  → verify HEAD workspace is clean
+HEAD checkout (no modified tracked files) + fetched BASE worktree
+  → verify HEAD workspace has no modified tracked files
   → build each revision's configured contracts
   → deploy WASM and simulate each revision's fixtures
   → capture RPC state and measure with protocol-matched native simulation
