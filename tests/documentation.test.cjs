@@ -78,12 +78,36 @@ test('README fixture and policy examples parse with the current public runtime A
 
 test('documented Action inputs, outputs and workflow snippets use supported names', () => {
   const action = yaml.parse(read('action.yml'));
+  const commentAction = yaml.parse(read('comment/action.yml'));
   const markdown = read('README.md');
   for (const input of Object.keys(action.inputs)) assert.ok(markdown.includes(`| \`${input}\` |`), input);
   for (const output of Object.keys(action.outputs)) assert.ok(markdown.includes(`\`${output}\``), output);
   for (const match of markdown.matchAll(/```yaml\n([\s\S]*?)```/g)) {
     for (const step of yaml.parse(match[1])) for (const name of Object.keys(step.with || {})) assert.ok(action.inputs[name], name);
   }
+
+  // Verify runtime wiring parity for both Action entry points (#169)
+  const mainRuntime = fs.readFileSync(path.join(root, 'src/action.ts'), 'utf8');
+  const commentRuntime = fs.readFileSync(path.join(root, 'src/comment-action.ts'), 'utf8');
+  for (const input of Object.keys(action.inputs)) {
+    assert.ok(
+      mainRuntime.includes(`"${input}"`) || mainRuntime.includes(`'${input}'`),
+      `action.yml input ${input} must be wired into src/action.ts`,
+    );
+  }
+  for (const output of Object.keys(action.outputs)) {
+    assert.ok(
+      mainRuntime.includes(`setOutput("${output}"`) || mainRuntime.includes(`setOutput('${output}'`),
+      `action.yml output ${output} must be emitted by src/action.ts`,
+    );
+  }
+  for (const input of Object.keys(commentAction.inputs)) {
+    assert.ok(
+      commentRuntime.includes(`"${input}"`) || commentRuntime.includes(`'${input}'`),
+      `comment/action.yml input ${input} must be wired into src/comment-action.ts`,
+    );
+  }
+
   const scripts = JSON.parse(read('package.json')).scripts;
   for (const file of mainDocs) for (const match of read(file).matchAll(/npm run ([a-z][a-z0-9:-]*)/g)) assert.ok(scripts[match[1]], `${file}: ${match[1]}`);
   for (const workflow of fs.readdirSync(path.join(root, '.github/workflows'))) yaml.parse(read(`.github/workflows/${workflow}`));
