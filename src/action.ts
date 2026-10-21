@@ -12,6 +12,7 @@ import {
   loadConfigContent,
   policyContentSha256,
   enforceThresholds,
+  resolveEffectivePolicy,
   Violation,
   PolicyOrigin,
 } from "./threshold";
@@ -591,12 +592,13 @@ async function run(): Promise<void> {
     core.setOutput("diff-json", validatedDiffJson);
 
     // Report is available in the job summary even without permission to post a PR comment.
+    const effectivePolicy = resolveEffectivePolicy(diff, config, policy.origin);
     const body = renderComment(
       diff,
       violations,
       baseRef,
       headSha,
-      policy.origin,
+      effectivePolicy,
     );
     if (process.env.GITHUB_STEP_SUMMARY)
       await core.summary.addRaw(body).write();

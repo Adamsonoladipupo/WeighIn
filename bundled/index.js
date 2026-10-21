@@ -54603,6 +54603,7 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
   }
   return results;
 }
+var MAX_PROTOCOL_EVENT_BYTES = 64 * 1024 * 1024;
 
 // src/threshold.ts
 var TOML = __toESM(require_toml());
@@ -54820,6 +54821,103 @@ function enforceThresholds(diff, config2) {
   }
   return violations;
 }
+function resolveEffectivePolicy(diff, config2, origin) {
+  if (!config2) {
+    return {
+      status: "absent",
+      report_only: true,
+      rules: []
+    };
+  }
+  const global2 = config2.thresholds?.global ?? {};
+  const perFunction = config2.thresholds?.functions ?? {};
+  const globalLimits = config2.limits?.global ?? {};
+  const functionLimits = config2.limits?.functions ?? {};
+  const hasRules = Boolean(global2.fail_on_any_regression) || GLOBAL_RULE_MAP.some(({ field }) => global2[field] !== void 0) || Object.keys(perFunction).length > 0 || Object.keys(globalLimits).length > 0 || Object.keys(functionLimits).length > 0;
+  if (!hasRules) {
+    return {
+      status: "empty",
+      mode: origin?.mode,
+      path: origin?.path,
+      revision: origin?.revision,
+      content_sha256: origin?.content_sha256,
+      report_only: true,
+      rules: []
+    };
+  }
+  const rules = [];
+  for (const [metric, limit] of Object.entries(globalLimits)) {
+    if (limit !== void 0) {
+      rules.push({
+        target: "global",
+        metric,
+        rule: `absolute_limit(${limit})`,
+        source: "global"
+      });
+    }
+  }
+  if (global2.fail_on_any_regression) {
+    for (const key of METRIC_KEYS) {
+      rules.push({
+        target: "global",
+        metric: key,
+        rule: "fail_on_any_regression",
+        source: "global"
+      });
+    }
+  }
+  for (const { field, metric, toRule } of GLOBAL_RULE_MAP) {
+    const val = global2[field];
+    if (typeof val === "number") {
+      rules.push({
+        target: "global",
+        metric,
+        rule: toRule(val),
+        source: "global"
+      });
+    }
+  }
+  for (const contract of diff.contracts) {
+    for (const fn of contract.functions) {
+      const fnLimits = functionLimits[fn.function_name];
+      if (fnLimits) {
+        for (const [metric, limit] of Object.entries(fnLimits)) {
+          if (limit !== void 0) {
+            rules.push({
+              target: fn.function_name,
+              metric,
+              rule: `absolute_limit(${limit})`,
+              source: "function_override"
+            });
+          }
+        }
+      }
+      const fnOverrides = perFunction[fn.function_name];
+      if (fnOverrides) {
+        for (const [metric, ruleVal] of Object.entries(fnOverrides)) {
+          if (ruleVal !== void 0) {
+            rules.push({
+              target: fn.function_name,
+              metric,
+              rule: ruleVal,
+              source: ruleVal === "ignore" ? "ignore" : "function_override"
+            });
+          }
+        }
+      }
+    }
+  }
+  return {
+    status: "active",
+    mode: origin?.mode,
+    path: origin?.path,
+    revision: origin?.revision,
+    content_sha256: origin?.content_sha256,
+    report_only: false,
+    fail_on_any_regression: global2.fail_on_any_regression,
+    rules
+  };
+}
 
 // src/comment.ts
 var COMMENT_MARKER = "<!-- weighin-report -->";
@@ -54949,7 +55047,39 @@ function renderComment(diff, violations, baseRef, headSha, policyOrigin) {
   const statusText = sortedViolations.length > 0 ? `**${sortedViolations.length} threshold violation${sortedViolations.length > 1 ? "s" : ""}**` : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
-  if (policyOrigin) {
+  const effectivePolicy = policyOrigin && "status" in policyOrigin ? policyOrigin : void 0;
+  if (effectivePolicy) {
+    if (effectivePolicy.status === "absent") {
+      lines.push(
+        "Policy status: **absent** (no policy configuration found; report-only mode)."
+      );
+      lines.push("");
+    } else if (effectivePolicy.status === "empty") {
+      lines.push(
+        `Policy status: **loaded-empty** from **${effectivePolicy.mode ?? "head"}** \`${effectivePolicy.path ?? "weighin.toml"}\` at \`${effectivePolicy.revision ?? "unknown"}\`; content SHA256 \`${effectivePolicy.content_sha256 ?? ""}\` (no threshold rules configured; report-only mode).`
+      );
+      lines.push("");
+    } else {
+      lines.push(
+        `Policy source: **${effectivePolicy.mode}** \`${effectivePolicy.path}\` at \`${effectivePolicy.revision}\`; content SHA256 \`${effectivePolicy.content_sha256}\`.`
+      );
+      lines.push("");
+      if (effectivePolicy.rules.length > 0) {
+        lines.push("<details><summary>Effective Policy Rules</summary>");
+        lines.push("");
+        lines.push("| Target | Metric | Effective Rule | Source |");
+        lines.push("| :--- | :--- | :--- | :--- |");
+        for (const r of effectivePolicy.rules) {
+          lines.push(
+            `| \`${r.target}\` | ${METRIC_LABELS[r.metric] ?? r.metric} | \`${r.rule}\` | ${r.source} |`
+          );
+        }
+        lines.push("");
+        lines.push("</details>");
+        lines.push("");
+      }
+    }
+  } else if (policyOrigin) {
     lines.push(
       `Policy source: **${policyOrigin.mode}** \`${policyOrigin.path}\` at \`${policyOrigin.revision}\`; content SHA256 \`${policyOrigin.content_sha256}\`.`
     );
@@ -55053,6 +55183,68 @@ var path4 = __toESM(require("path"));
 var os = __toESM(require("os"));
 var import_crypto = require("crypto");
 var exec = __toESM(require_exec());
+function snapshotContractInputs(packageDir) {
+  const hashes2 = /* @__PURE__ */ new Map();
+  function scanDir(dir) {
+    if (!fs3.existsSync(dir)) return;
+    const entries = fs3.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "target" || entry.name === "node_modules" || entry.name === ".git") {
+        continue;
+      }
+      const fullPath = path4.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath);
+      } else if (entry.isFile()) {
+        if (entry.name === "Cargo.toml" || entry.name === "Cargo.lock" || entry.name.endsWith(".rs")) {
+          try {
+            const hash2 = (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(fullPath)).digest("hex");
+            hashes2.set(fullPath, hash2);
+          } catch {
+          }
+        }
+      }
+    }
+  }
+  scanDir(packageDir);
+  let current = path4.dirname(packageDir);
+  while (current && current !== packageDir) {
+    const parentToml = path4.join(current, "Cargo.toml");
+    const parentLock = path4.join(current, "Cargo.lock");
+    if (fs3.existsSync(parentToml)) {
+      hashes2.set(
+        parentToml,
+        (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(parentToml)).digest("hex")
+      );
+    }
+    if (fs3.existsSync(parentLock)) {
+      hashes2.set(
+        parentLock,
+        (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(parentLock)).digest("hex")
+      );
+    }
+    if (fs3.existsSync(path4.join(current, ".git"))) break;
+    const parent = path4.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return { packageDir, hashes: hashes2 };
+}
+function assertContractInputsNotMutated(snapshot) {
+  for (const [filePath, expectedHash] of snapshot.hashes.entries()) {
+    if (!fs3.existsSync(filePath)) {
+      throw new Error(
+        `Default contract build mutated tracked inputs: input file was deleted during build: ${filePath}`
+      );
+    }
+    const currentHash = (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(filePath)).digest("hex");
+    if (currentHash !== expectedHash) {
+      throw new Error(
+        `Default contract build mutated tracked inputs: ${path4.basename(filePath)} was modified during build at ${filePath}`
+      );
+    }
+  }
+}
 function verifyBuildStorage(directory, bytes = 1024 * 1024) {
   const probePath = path4.join(directory, ".weighin-storage-probe");
   const expected = Buffer.alloc(bytes, 165);
@@ -55208,6 +55400,9 @@ async function buildContracts(fixturesPath, rustToolchain) {
       }
       try {
         verifyBuildStorage(outputDir);
+        const inputSnapshot = snapshotContractInputs(
+          path4.dirname(pkg.manifest_path)
+        );
         await command(
           "stellar",
           [
@@ -55225,6 +55420,7 @@ async function buildContracts(fixturesPath, rustToolchain) {
           path4.dirname(pkg.manifest_path),
           { ...env, TMPDIR: outputDir, TMP: outputDir, TEMP: outputDir }
         );
+        assertContractInputsNotMutated(inputSnapshot);
         wasm = fs3.readFileSync(
           path4.join(outputDir, `${targetName.replace(/-/g, "_")}.wasm`)
         );
@@ -55853,12 +56049,13 @@ Commit or stash changes before running benchmarks.`
     const result = violations.length > 0 ? "fail" : "pass";
     core3.setOutput("result", result);
     core3.setOutput("diff-json", validatedDiffJson);
+    const effectivePolicy = resolveEffectivePolicy(diff, config2, policy.origin);
     const body = renderComment(
       diff,
       violations,
       baseRef,
       headSha,
-      policy.origin
+      effectivePolicy
     );
     if (process.env.GITHUB_STEP_SUMMARY)
       await core3.summary.addRaw(body).write();

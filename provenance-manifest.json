@@ -92,7 +92,11 @@
       "sha256": "8ab417117aeae423812950bec1be424deeb5f9195f11e561fe33021113462027"
     },
     {
-      "path": "src/identity.ts",
+      "path": "src\\git-utils.ts",
+      "sha256": "8ab417117aeae423812950bec1be424deeb5f9195f11e561fe33021113462027"
+    },
+    {
+      "path": "src\\identity.ts",
       "sha256": "9da2912c09aa7ccfc1f711d25d5fc5eb2fe4080383239a1adff6f979cb71494f"
     },
     {
