@@ -21,12 +21,16 @@ const consumerTsconfig = {
   include: ['index.ts'],
 };
 
-let tarballPath, consumerDir;
+let tarballPath, consumerDir, packDir;
 
 before(() => {
-  const packResult = spawnSync('npm', ['pack'], { cwd: repoRoot, encoding: 'utf8', timeout: 120000 });
+  // Pack into an owned temporary directory instead of the repository root:
+  // node's test runner executes test files concurrently, and a tarball left in
+  // the checkout would be observed by other suites as an unexpected artifact.
+  packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weighin-types-pack-'));
+  const packResult = spawnSync('npm', ['pack', '--pack-destination', packDir], { cwd: repoRoot, encoding: 'utf8', timeout: 120000 });
   assert.equal(packResult.status, 0, `npm pack failed: ${packResult.stderr}`);
-  tarballPath = path.join(repoRoot, packResult.stdout.trim().split('\n').pop().trim());
+  tarballPath = path.join(packDir, packResult.stdout.trim().split('\n').pop().trim());
   consumerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weighin-types-consumer-'));
   fs.writeFileSync(
     path.join(consumerDir, 'package.json'),
@@ -46,6 +50,7 @@ before(() => {
 
 after(() => {
   if (tarballPath) fs.rmSync(tarballPath, { force: true });
+  if (packDir) fs.rmSync(packDir, { recursive: true, force: true });
   if (consumerDir) fs.rmSync(consumerDir, { recursive: true, force: true });
 });
 

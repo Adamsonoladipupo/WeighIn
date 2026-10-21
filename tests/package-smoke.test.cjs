@@ -18,8 +18,11 @@ const requiredPackagedEntries = [
 ];
 
 test('pack using normal lifecycle and verify installed consumer public API and CLI outside repo', (t) => {
-  // 1. Pack using standard npm pack lifecycle
-  const packResult = spawnSync('npm', ['pack'], {
+  // 1. Pack using standard npm pack lifecycle into an owned temporary
+  //    directory. node's test runner executes test files concurrently, so a
+  //    tarball written into the checkout would be observed by other suites.
+  const packDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weighin-pack-'));
+  const packResult = spawnSync('npm', ['pack', '--pack-destination', packDir], {
     cwd: repoRoot,
     encoding: 'utf8',
     timeout: 60000,
@@ -27,13 +30,14 @@ test('pack using normal lifecycle and verify installed consumer public API and C
   assert.equal(packResult.status, 0, `npm pack failed: ${packResult.stderr}`);
   const lines = packResult.stdout.trim().split('\n');
   const tarballName = lines[lines.length - 1].trim();
-  const tarballPath = path.join(repoRoot, tarballName);
+  const tarballPath = path.join(packDir, tarballName);
   assert.ok(fs.existsSync(tarballPath), `Expected tarball at ${tarballPath}`);
 
   // 2. Create isolated consumer directory outside repository
   const consumerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weighin-consumer-'));
   t.after(() => {
     fs.rmSync(tarballPath, { force: true });
+    fs.rmSync(packDir, { recursive: true, force: true });
     fs.rmSync(consumerDir, { recursive: true, force: true });
   });
 
@@ -161,6 +165,7 @@ test('tarball validator rejects an artifact missing required packaged entries', 
 
 test('distinguishes inclusion-only dry run from real installed consumer execution', () => {
   // Dry-run only checks inclusion list
+  const tarballsBefore = fs.readdirSync(repoRoot).filter((name) => name.endsWith('.tgz'));
   const dryRun = spawnSync('npm', ['pack', '--dry-run', '--json'], {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -169,6 +174,8 @@ test('distinguishes inclusion-only dry run from real installed consumer executio
   assert.equal(dryRun.status, 0);
   const packInfo = JSON.parse(dryRun.stdout);
   assert.ok(Array.isArray(packInfo[0].files));
-  // Dry run did not create any node_modules or execute code
-  assert.equal(fs.existsSync(path.join(repoRoot, 'weighin-1.0.0.tgz')), false);
+  // Dry run did not create any node_modules or execute code: it must not add a
+  // tarball to the checkout.
+  const tarballsAfter = fs.readdirSync(repoRoot).filter((name) => name.endsWith('.tgz'));
+  assert.deepEqual(tarballsAfter.sort(), tarballsBefore.sort());
 });
