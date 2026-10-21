@@ -26099,7 +26099,72 @@ var init_github = __esm({
 
 // src/comment-action.ts
 var core = __toESM(require_core());
+init_github();
 var fs = __toESM(require("fs"));
+
+// src/pr-metadata.ts
+var PR_METADATA_SCHEMA_VERSION = 1;
+var SHA_PATTERN = /^[0-9a-f]{40}$/i;
+function parsePrMetadata(raw, expectedRepository) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("PR metadata is not valid JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("PR metadata must be a JSON object");
+  }
+  const metadata = parsed;
+  if (!Object.prototype.hasOwnProperty.call(metadata, "schemaVersion")) {
+    throw new Error(
+      "Legacy unversioned PR metadata is not supported; schemaVersion is required"
+    );
+  }
+  if (metadata.schemaVersion !== PR_METADATA_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported PR metadata schemaVersion: ${JSON.stringify(metadata.schemaVersion)}`
+    );
+  }
+  if (typeof metadata.repository !== "string" || metadata.repository.trim() === "") {
+    throw new Error("PR metadata repository is missing");
+  }
+  if (metadata.repository.toLowerCase() !== expectedRepository.trim().toLowerCase()) {
+    throw new Error(
+      `PR metadata repository ${metadata.repository} does not match trusted repository ${expectedRepository}`
+    );
+  }
+  if (typeof metadata.prNumber !== "number" || !Number.isSafeInteger(metadata.prNumber) || metadata.prNumber <= 0) {
+    throw new Error("PR metadata prNumber must be a positive integer");
+  }
+  if (typeof metadata.headSha !== "string" || !SHA_PATTERN.test(metadata.headSha)) {
+    throw new Error(
+      "PR metadata headSha must be a 40-character hexadecimal SHA"
+    );
+  }
+  return {
+    schemaVersion: metadata.schemaVersion,
+    repository: metadata.repository,
+    prNumber: metadata.prNumber,
+    headSha: metadata.headSha
+  };
+}
+
+// src/record-schema.ts
+var METRIC_KEYS = [
+  "cpu_instructions",
+  "memory_bytes",
+  "ledger_read_entries",
+  "ledger_read_bytes",
+  "ledger_write_entries",
+  "ledger_write_bytes",
+  "historical_data_read_bytes",
+  "contract_data_hard_limit",
+  "tx_size_bytes",
+  "events_count",
+  "event_data_bytes"
+];
+var METRIC_KEY_SET = new Set(METRIC_KEYS);
 
 // src/comment.ts
 var COMMENT_MARKER = "<!-- weighin-report -->";
@@ -26155,10 +26220,8 @@ async function run() {
     }
     const reportBody = fs.readFileSync(reportPath, "utf8");
     const metadataRaw = fs.readFileSync(metadataPath, "utf8");
-    const metadata = JSON.parse(metadataRaw);
-    if (!metadata.prNumber) {
-      throw new Error("prNumber not found in metadata file");
-    }
+    const { owner, repo } = context2.repo;
+    const metadata = parsePrMetadata(metadataRaw, `${owner}/${repo}`);
     await upsertPrComment(token, metadata.prNumber, reportBody);
   } catch (error) {
     core.setFailed(error.message);

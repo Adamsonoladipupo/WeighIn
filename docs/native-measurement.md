@@ -33,6 +33,15 @@ validated for executable access and versioned output; the binary's SHA256 is
 recorded. Missing binaries, malformed output, host failures and unsupported
 protocols produce errors, not measurements containing zero.
 
+Helper executable identity is strictly bound to actual execution: the executable
+file's content SHA256 is captured before invocation, re-verified immediately after
+process termination, validated across retry attempts, and checked before emitting
+provenance. If the binary is replaced, mutated, or modified during or across execution,
+measurement fails fast with an explicit error. Remaining filesystem trust assumptions:
+WeighIn relies on standard OS filesystem access controls and assumes the host storage
+hosting the binary is not subject to in-flight inode replacement or unauthorized write
+mutation by concurrent untrusted local processes outside Node's process space.
+
 The local network script and workflow example pin the exact protocol-28 image
 used in the proof. The Action's modern contract build now uses the
 [Stellar build path](contract-build.md), with its own verified reference and
@@ -57,14 +66,22 @@ CPU comes directly from `simulated_instructions`; memory from `simulated_memory`
 They are consumed Soroban cost-model units, not submission budgets, hardware
 instruction counts or process RSS. Compute limits come from the same captured
 network configuration. No RPC instruction-budget substitution is used.
+Measured transactions must match the captured RPC endpoint's network passphrase;
+mismatched networks fail immediately before any simulation or helper execution.
 
 The adapter captures all footprint keys plus network config, ledger data,
 extensions, last-modified sequence, TTL metadata and explicitly queried absence.
-Batches must share the simulation's reported ledger. It verifies the matching
-ledger header, retries the entire capture on drift, and expands discovered keys
-when the helper reports an uncaptured read. After 30 attempts, incomplete/drifting
-state is an error. This uses current-state RPC APIs; it is not a historical-state
-reader.
+Every required network configuration setting is identified and verified before
+native helper execution; missing configuration entries fail immediately with a
+bounded list of missing setting names and are not retried as ordinary ledger drift.
+Batches must share the simulation's reported ledger. Header retrieval requires
+exactly one matching sequence row for the captured ledger with a well-formed
+history entry; ambiguous duplicate headers or malformed entry XDR are rejected,
+while unrelated valid page rows are accepted according to the RPC contract.
+It verifies the matching ledger header, retries the entire capture on drift,
+and expands discovered keys when the helper reports an uncaptured read. After 30
+attempts, incomplete/drifting state is an error. This uses current-state RPC APIs;
+it is not a historical-state reader.
 
 For the observed `getLedgerEntries` JSON-RPC error `-32603` with message
 `could not query captive core: http request failed with non-200 status code (404)`,
@@ -91,6 +108,17 @@ and host features, plus audited resource caps and metric source/limit semantics.
 config hashes remain diagnostics and are shown for both revisions. They do not
 change the consumed compute calibration. It records both snapshot ledgers/hashes. It does not guarantee
 that arbitrary live contract state remains unchanged between captures.
+
+## Cancellation lifecycle
+
+Measurement and helper operations accept an optional `signal?: AbortSignal` across all phases:
+
+- **Account and network readiness**: `ensureAccountReady` and `getOrInitAccount` check cancellation before and during polling. Readiness retry backoffs listen to `signal` to abort immediately rather than waiting for remaining sleep durations.
+- **RPC calls and polling**: `callRpc`, `waitForTransaction`, and `submitAndConfirm` link the caller's cancellation signal with internal timeouts via `AbortSignal.any`. Polling intervals abort promptly on signal trigger.
+- **Native helper execution**: `simulateSnapshot` and `execute` pass `signal` to Node's `execFile`, which terminates the spawned native helper child process promptly (`SIGTERM` / `SIGKILL`) on abort.
+- **Simulation and transient recovery**: `measureInvocation` aborts transient captive-core retry delays immediately upon cancellation and halts retry loops.
+- **Resource protection**: Caller-provided key files (`keyFile`) are preserved on cancellation; temporary deployment keys and scratch files are cleaned up.
+- **Fail-closed guarantees**: Cancelled measurements throw explicit cancellation errors (`AbortError`) and never produce synthetic zero or fallback benchmarks.
 
 ## Schema migration
 

@@ -72,8 +72,12 @@ the final saved body equals the core report
 ran default-branch `eaeea48ca77d1ff74c3a4cdee5f158a44fb4819e`, not PR code;
 their own `head_sha` must not be confused with the benchmark producer's revision.
 
-Consumer examples now pin the verified public immutable `bbbe9001bbd375fd6a1ff75be5da2593c86fff20`.
-Historical experiments below remain attributed to their original producers.
+Consumer examples pin the verified public immutable `bbbe9001bbd375fd6a1ff75be5da2593c86fff20`.
+That revision is a **legacy** producer/consumer pair under the versioned metadata
+contract: its producer emits unversioned metadata and its consumer accepts it.
+The new versioned consumer rejects that legacy artifact instead of inferring a
+repository. Historical experiments below remain attributed to their original
+producers.
 
 ## External Project Validation — Soroban Forge
 
@@ -374,6 +378,44 @@ failure are preserved with their successful retries; neither failure was counted
 as a passing benchmark. The [security review](DEPENDENCY_SECURITY.md) identifies
 the dependency updates. The publication validation above verifies the patched
 public revision now used by consumer pins.
+
+## Distinct benchmark contracts control validation
+
+The [distinct contracts control proof](distinct-contracts-control.md) validates two
+genuinely distinct contract WASMs with overlapping function and case labels (`hello` / `id:world`)
+and explicit logical identities (`id:contract-alpha` and `id:contract-beta`).
+Durable evidence in [distinct-contracts-control](experiments/distinct-contracts-control/)
+verifies that both contracts pair independently with zero control deltas across all 8
+comparable metrics, with complete return parity and verifier rejection of swapped or missing
+identities. This independent deployment proof remains distinct from stateful caller/callee proofs.
+
+## Ledger-dependent benchmark variation validation
+
+The [controlled ledger-dependent variation proof](ledger-variation.md) demonstrates that
+bounded repeatability on state-invariant fixtures does not imply arbitrary ledger/time
+independence. Using a proof-only contract branch (`hello(Env, Symbol) -> Vec<Symbol>`) that
+depends explicitly on `env.ledger().sequence()` and `env.ledger().timestamp()` while keeping
+source, compiled WASM (`87f52e776f2689bb00c0c163a7f402c984c322c4c644d5f511bd46f25817010a`),
+runtime address, seed, and cost calibration fixed, durable evidence in
+[ledger-variation](experiments/ledger-variation/) records five controlled standalone ledger
+steps (ledgers 900–1000). Pre-threshold snapshots (900 → 925) have zero deltas, whereas
+crossing the ledger threshold (900 → 1000) produces +52,966 CPU, +70,658 memory, +96 write
+bytes, and +36 event+return bytes (`REPEATABILITY_VARIATION_FOUND`), triggering all 6 configured
+policy violations without suppressing them for an unchanged artifact.
+
+## Source-account effect validation
+
+The [source-account effect proof](source-account-effects.md) measures one contract case under
+three valid source accounts on the pinned protocol-28 standalone network while the contract
+code, the arguments, the protocol, the calibration and the resource limits stay fixed. Durable
+evidence in [source-account-effects](experiments/source-account-effects/) retains the raw RPC
+captures, the native helper replays, the per-metric effects, an identical repeatability control
+and the fail-closed evidence for a malformed key and for an account that is not on the network.
+The source account changed no measured metric in that case
+(`cross_run_comparison_valid: true`), the repeatability control reported no changed metric, and
+the account is now recorded in `provenance.source_account` and compared with the other
+environment identities, so saved records measured under different accounts are reported as
+incompatible instead of being compared.
 
 ## Known boundaries
 

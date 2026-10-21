@@ -19,7 +19,8 @@ These are Soroban simulation resources, not hardware performance or fee estimate
 ## How It Works
 
 ```text
-HEAD checkout + fetched BASE worktree
+HEAD checkout (must have no uncommitted changes) + fetched BASE worktree
+  → verify HEAD workspace is clean
   → build each revision's configured contracts
   → deploy WASM and simulate each revision's fixtures
   → capture RPC state and measure with protocol-matched native simulation
@@ -117,6 +118,37 @@ to the default branch. It reads report artifacts without executing PR code with
 a write token. The supplied consumer posts only after a successful PR producer;
 failed policy reports remain in artifacts and job summaries.
 
+### PR comment metadata contract
+
+The producer writes a versioned metadata artifact only for pull request events:
+
+```json
+{
+  "schemaVersion": 1,
+  "repository": "WeighInNG/WeighIn",
+  "prNumber": 27,
+  "headSha": "f679238a096b49df0edfaf7d02d5bfa2dfd6be8f"
+}
+```
+
+`repository` is the base repository that owns the trusted comment workflow, so a
+fork PR still records the base repository rather than the fork. Before any API
+request the consumer re-validates the version, the trusted repository
+(case-insensitively), a positive integer PR number and a 40-character
+hexadecimal SHA. Malformed JSON, a missing or unsupported `schemaVersion`,
+another repository and malformed PR-number/SHA fields all fail before mutation.
+These checks only validate the artifact shape and repository identity; they do
+not prove the run belongs to the PR.
+
+Producer and consumer versions must be paired. **Producer v1 (this revision)
+requires consumer v1 (this revision), and the v1 consumer rejects legacy
+unversioned metadata; it never infers a missing repository.** The previously
+published immutable pins at `bbbe9001bbd375fd6a1ff75be5da2593c86fff20` remain a
+documented **legacy** producer/consumer pair: that pinned producer emits
+unversioned metadata and that pinned consumer accepts it. The examples here keep
+that verified legacy pin; do not pair a legacy producer with the v1 consumer and
+do not repin these examples to an unverified revision.
+
 ## Configuration
 
 All supported inputs are declared in [action.yml](action.yml):
@@ -125,18 +157,46 @@ All supported inputs are declared in [action.yml](action.yml):
 |---|---|
 | `fixtures-path` | Required fixture path; default `weighin-fixtures.json` |
 | `config-path` | HEAD policy file; default `weighin.toml`. A missing file means report-only |
+| `trusted-policy-ref` | Optional ref fetched from `origin` for an immutable policy source; must be paired with `trusted-policy-path` |
+| `trusted-policy-path` | Repository path read from the resolved trusted policy commit; HEAD cannot replace it |
 | `rpc-url` | Compatible standalone RPC; default `http://localhost:8000/rpc` |
-| `base-ref` | Fetched baseline ref; PR base branch, otherwise `main`, if omitted |
+| `base-ref` | Baseline branch, tag, or commit SHA; PR base branch, otherwise `main`, if omitted. Invalid refs are rejected before builds or deployment. |
 | `rust-toolchain` | Contract-build Rustup override; does not change pinned native-helper toolchain |
 | `build-command` | Custom shell build command in each revision; replaces default build guarantees |
-| `skip-build` | `true` uses prebuilt fixture WASMs in both revisions; incompatible with `build-command` |
-| `report-path` | Optional Markdown report destination |
-| `metadata-path` | Optional PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
+| `skip-build` | `true` uses prebuilt fixture WASMs in both revisions; incompatible with `build-command`. Accepts YAML 1.2 boolean spellings (`true`, `True`, `TRUE`, `false`, `False`, `FALSE`); defaults to `false`. Non-boolean values are rejected |
+| `report-path` | Optional Markdown report destination; replaced atomically, so an interrupted write keeps the previously published report |
+| `metadata-path` | Optional versioned PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
 | `github-token` | Optional direct PR-comment token; omit for the separate comment workflow |
 
 Outputs: `result` is `pass` or `fail`; `diff-json` contains the comparison.
 An unsuccessful comparison emits `fail` and `{}`. A valid comparison with policy
-violations emits its real diff, writes the report, then fails the Action.
+violations emits its real diff, writes the report, then fails the Action. If a
+later report or job-summary write fails after a valid comparison, the Action
+still fails with that delivery diagnostic while retaining the computed diff.
+
+The Markdown report is delivered atomically. It is written to a temporary file
+this run owns, in the destination directory, and renamed over the destination
+only after the complete report was written. A failed or interrupted write
+therefore leaves an already published report unchanged instead of truncating
+it, and never publishes a partial report. Only the temporary file created by
+the failing run is cleaned up; a concurrent writer's temporary file is left
+untouched. The replacement is a same-filesystem rename, so the content is not
+fsynced before it becomes visible.
+
+See [policy and package provenance](docs/policy-and-package-provenance.md) for
+the trusted-policy boundary, package manifest verification, and signing
+guidance.
+
+### Endpoint diagnostics
+
+CLI, Action and transport diagnostics render the configured RPC endpoint through
+one shared sanitizer instead of echoing it. Scheme, host, port and path are kept;
+userinfo is stripped, every query value is replaced with `REDACTED` (keys are
+preserved) and the fragment is dropped. A malformed URL becomes a fixed
+`[invalid endpoint]` placeholder rather than the raw input. The sanitized form is
+for display only: requests still use the configured endpoint unchanged. This is
+shape-based redaction, not a guarantee about secrets embedded in the path or in
+other arbitrary text.
 
 Relative rules accept `strict_zero_tolerance`, `allow_X_percent_increase`, a
 nonnegative numeric percentage, or `ignore`. Rules are scoped by function name
@@ -185,6 +245,15 @@ The CLI measures existing WASMs and writes JSON; it does not build, compare
 revisions, enforce thresholds or post comments. Provision the native helper/RPC,
 then run `node dist/cli.js <fixtures.json> --rpc-url <standalone-rpc> --output <results.json>`
 from a built checkout. See [native provisioning](docs/native-measurement.md).
+
+## Source Accounts
+
+The account that invokes a measured call is recorded in
+`provenance.source_account`, and `measureSourceAccountEffects` from
+`weighin/dist/source-account` measures one case under several source accounts
+while code, arguments, protocol, calibration and resource limits stay fixed.
+It reports the per-metric effect and whether results stay comparable across
+accounts. See [source-account effects](docs/source-account-effects.md).
 
 ## Evidence
 
