@@ -19,6 +19,7 @@ see [Evidence](EVIDENCE.md), [metric provenance](metric-provenance.md) and
 | Fixture arguments | Unsupported outside listed conversions | `toScVal` supports bool, string, symbol, u32/i32, u64/i64/u128/i128, address, hex bytes, typed vec/map. Large integers must be strings. Other ScVal types and output substitution are unsupported |
 | Contract builds | Environment-dependent | Default build resolves workspace cdylib target names (falling back to package names when the target name is omitted) from fixture WASM basenames and rejects packages with multiple cdylib targets. Tools, locked dependency access and healthy temporary storage are caller requirements. SDK-specific Rust minimums can exceed the builder's gate |
 | Custom / prebuilt builds | Environment-dependent | `build-command` and `skip-build` bypass CLI/version/optimization/fresh-output/storage validation. Callers own artifact freshness and comparable build flags |
+| Workspace cleanliness | Required for accurate benchmarking | HEAD workspace must have no uncommitted changes before measurement. The Action checks git status and fails if any tracked files are modified, ensuring benchmarks reflect the reported HEAD revision |
 | Optimizer storage | Environment-dependent | Pre/post write/fsync/read probes catch the reproduced persistent quota failure. They do not reserve capacity or rule out a transient failure solely during optimization |
 | Reproducibility | Not yet validated universally | Five clean reference builds and five samples per seven cases were stable on one controlled host/network. This is not cross-machine/compiler/network or arbitrary-contract determinism. Failed setup attempts are retained |
 | Multiple contracts | Partially validated | Structured identities avoid cross-contract collisions; tests and the migration bridge exercise multiple declarations. Identical WASM on one network/deployer can share a runtime address. Distinct arbitrary stateful multi-contract suites are not validated |
@@ -37,3 +38,14 @@ see [Evidence](EVIDENCE.md), [metric provenance](metric-provenance.md) and
 See [dependency security review](DEPENDENCY_SECURITY.md) for the dated npm audit,
 resolved advisory paths, actual execution exposure and validation. Audit results
 are a snapshot, not a guarantee against future advisories.
+
+
+# Known Limitations & Protocol Safeguards
+
+## Event-Volume Resource Accounting
+- Workloads approaching the supported protocol cap (64 MB / 10,000 events) are strictly audited.
+- Over-limit failures are recorded transparently without synthesizing or fabricating metrics.
+
+## Provenance Source & Version Pairing
+- All contract execution records must match verified producer/source/version/protocol combination entries registered in the protocol registry.
+- Unrecognized or arbitrary non-blank strings are strictly rejected to maintain comparison integrity.
