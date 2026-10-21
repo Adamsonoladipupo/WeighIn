@@ -37,21 +37,3 @@ see [Evidence](EVIDENCE.md), [metric provenance](metric-provenance.md) and
 See [dependency security review](DEPENDENCY_SECURITY.md) for the dated npm audit,
 resolved advisory paths, actual execution exposure and validation. Audit results
 are a snapshot, not a guarantee against future advisories.
-
-
-# Known Limitations & Protocol Safeguards
-
-## Event-Volume Resource Accounting
-- Workloads approaching the supported protocol cap (64 MB / 10,000 events) are strictly audited.
-- Over-limit failures are recorded transparently without synthesizing or fabricating metrics.
-
-## Provenance Source & Version Pairing
-- All contract execution records must match verified producer/source/version/protocol combination entries registered in the protocol registry.
-- Unrecognized or arbitrary non-blank strings are strictly rejected to maintain comparison integrity.
-
-
-# Known Limitations & Protocol Safeguards
-
-- **Setup Execution Fail-Closed Policy**: Setup pipelines immediately abort on the first rejected, timed-out, or failed step, retaining partial receipts as incomplete and bypassing downstream benchmark invocation.
-- **Dependency Graph Validation**: Deployment graphs are strictly verified for cycles, duplicate entries, and missing references prior to transaction submission or resource funding.
-- **Network Isolation**: Default unit test suites operate under strict socket isolation, permitting only local loopback communication unless explicitly configured otherwise.

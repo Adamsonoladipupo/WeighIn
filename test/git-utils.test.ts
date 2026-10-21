@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as exec from "@actions/exec";
-import { isWorkspaceClean, getModifiedFiles, getHeadSha, capture, captureRaw } from "../src/git-utils";
+import {
+  isWorkspaceClean,
+  getModifiedFiles,
+  getHeadSha,
+  capture,
+  captureRaw,
+} from "../src/git-utils";
 
 vi.mock("@actions/exec");
 
@@ -106,7 +112,9 @@ describe("git-utils", () => {
         if (args[0] === "status") {
           const listeners = options?.listeners as any;
           if (listeners?.stdout) {
-            listeners.stdout(Buffer.from("M  src/contract.rs\nA  new.txt\n?? untracked.txt\n"));
+            listeners.stdout(
+              Buffer.from("M  src/contract.rs\nA  new.txt\n?? untracked.txt\n"),
+            );
           }
           return 0;
         }
