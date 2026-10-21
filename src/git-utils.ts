@@ -51,11 +51,20 @@ export async function isWorkspaceClean(dir: string): Promise<boolean> {
 /** Get list of modified files in git workspace. */
 export async function getModifiedFiles(dir: string): Promise<string[]> {
   try {
-    const status = await capture("git", ["status", "--porcelain"], dir);
+    // `git status --porcelain` prefixes every entry with a two-character
+    // status column, so the raw output is required: trimming it would shift
+    // the column and report every path one character short.
+    const status = await captureRaw("git", ["status", "--porcelain"], dir);
     return status
       .split("\n")
       .filter((line) => line.trim())
-      .map((line) => line.substring(3).trim());
+      .map((line) => {
+        const path = line.slice(3).trim();
+        // A rename is reported as "<old> -> <new>"; the new path is the file
+        // that the workspace currently contains.
+        const rename = path.indexOf(" -> ");
+        return rename === -1 ? path : path.slice(rename + 4);
+      });
   } catch {
     return [];
   }

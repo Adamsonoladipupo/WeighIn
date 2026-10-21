@@ -283,6 +283,15 @@ test("Action rejects a healthy but unsupported RPC network before builds or fund
   }
 });
 
+test("Action refuses to measure a HEAD checkout with uncommitted changes", () => {
+  const result = action("dirty-head");
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.summary, /HEAD workspace has uncommitted changes/);
+  assert.match(result.summary, /contract\/src\/lib\.rs/);
+  assert.equal(result.keyPaths.length, 0, "no account may be funded for a dirty checkout");
+  assert.deepEqual(result.builds, [], "no contract may be built for a dirty checkout");
+});
+
 test("Action validates supported baseline branch, tag, and SHA forms", () => {
   for (const ref of ["feature/topic", "v1.2.3", "0123456789abcdef0123456789abcdef01234567"]) {
     const result = action("control", policy, null, null, "fixtures.json", undefined, ref);

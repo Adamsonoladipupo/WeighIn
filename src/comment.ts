@@ -375,36 +375,3 @@ export function renderComment(
 
   return lines.join("\n");
 }
-
-
-import { ReportEvaluationResult } from './report';
-
-export function renderComment(evaluation: ReportEvaluationResult): string {
-  let badge = '🟢 All thresholds passed';
-  let header = '### WeighIn Performance Report';
-
-  switch (evaluation.state) {
-    case 'report-only':
-      badge = '🔵 Report-Only Execution (Thresholds Passed)';
-      break;
-    case 'passed':
-      badge = '🟢 All Thresholds Passed';
-      break;
-    case 'violated':
-      badge = `🔴 Policy Violated (${evaluation.violationsCount} failure(s))`;
-      break;
-    case 'absent':
-      badge = '⚪ Absent Policy (Informational Report)';
-      break;
-    case 'empty':
-      badge = '🟡 Loaded-Empty Policy Evaluation';
-      break;
-  }
-
-  return `
-${header}
-**Status:** ${badge}
-**Details:** ${evaluation.message}
-*Report-only mode active: ${evaluation.reportOnly}*
-`.trim();
-}
