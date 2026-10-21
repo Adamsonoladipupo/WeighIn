@@ -1161,3 +1161,74 @@ export async function measureInvocation(provenance: ComputeProvenance, eventVolu
   return { valid: true, report: 'Invocation measured successfully within cap boundaries.' };
 }
 
+
+
+
+/**
+ * Deployment graph simulation and topological sorting module.
+ */
+
+export interface DeploymentNode {
+  id: string;
+  dependencies: string[];
+}
+
+export function topologicalSortDeployments(nodes: DeploymentNode[]): { sorted?: string[]; error?: string } {
+  const adjList = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+  const nodeSet = new Set<string>();
+
+  for (const node of nodes) {
+    if (nodeSet.has(node.id)) {
+      return { error: `Duplicate deployment node detected: ${node.id}` };
+    }
+    nodeSet.add(node.id);
+    adjList.set(node.id, []);
+    inDegree.set(node.id, 0);
+  }
+
+  for (const node of nodes) {
+    for (const dep of node.dependencies) {
+      if (!nodeSet.has(dep)) {
+        return { error: `Missing dependency node: ${dep} required by ${node.id}` };
+      }
+      if (dep === node.id) {
+        return { error: `Self-cycle detected on node: ${node.id}` };
+      }
+      adjList.get(dep)!.push(node.id);
+      inDegree.set(node.id, (inDegree.get(node.id) || 0) + 1);
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [id, degree] of inDegree.entries()) {
+    if (degree === 0) {
+      queue.push(id);
+    }
+  }
+
+  queue.sort();
+  const sorted: string[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    sorted.push(current);
+
+    const neighbors = adjList.get(current) || [];
+    neighbors.sort();
+    for (const neighbor of neighbors) {
+      inDegree.set(neighbor, inDegree.get(neighbor)! - 1);
+      if (inDegree.get(neighbor) === 0) {
+        queue.push(neighbor);
+      }
+    }
+    queue.sort();
+  }
+
+  if (sorted.length !== nodes.length) {
+    return { error: 'Cyclic dependency detected across deployment graph' };
+  }
+
+  return { sorted };
+}
+
