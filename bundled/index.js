@@ -55324,22 +55324,33 @@ async function captureRaw(cmd, args, cwd) {
   });
   return out;
 }
+function parseTrackedChanges(status) {
+  return status.split("\n").filter((line) => line.trim() && !line.startsWith("??")).map((line) => {
+    const path8 = line.slice(3).trim();
+    const rename = path8.indexOf(" -> ");
+    return rename === -1 ? path8 : path8.slice(rename + 4);
+  });
+}
 async function isWorkspaceClean(dir) {
   try {
-    const status = await capture("git", ["status", "--porcelain"], dir);
-    return status.trim() === "";
+    const status = await captureRaw(
+      "git",
+      ["status", "--porcelain", "--untracked-files=no"],
+      dir
+    );
+    return parseTrackedChanges(status).length === 0;
   } catch {
     return false;
   }
 }
 async function getModifiedFiles(dir) {
   try {
-    const status = await captureRaw("git", ["status", "--porcelain"], dir);
-    return status.split("\n").filter((line) => line.trim()).map((line) => {
-      const path8 = line.slice(3).trim();
-      const rename = path8.indexOf(" -> ");
-      return rename === -1 ? path8 : path8.slice(rename + 4);
-    });
+    const status = await captureRaw(
+      "git",
+      ["status", "--porcelain", "--untracked-files=no"],
+      dir
+    );
+    return parseTrackedChanges(status);
   } catch {
     return [];
   }
