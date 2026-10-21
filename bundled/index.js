@@ -53433,13 +53433,22 @@ function captureHelperIdentity(helperPath) {
   }
 }
 async function simulateSnapshot(input, helperPath, signal) {
-  const stdout = await execute(
-    helperPath,
-    [],
-    JSON.stringify(input),
-    void 0,
-    signal
-  );
+  let stdout;
+  try {
+    stdout = await execute(
+      helperPath,
+      [],
+      JSON.stringify(input),
+      void 0,
+      signal
+    );
+  } catch (failure) {
+    const envelope = parseHelperFailure(failure);
+    if (envelope) {
+      throw new Error(`Native helper ${envelope.status}: ${envelope.message}`);
+    }
+    throw failure;
+  }
   let output;
   try {
     output = outputSchema.parse(JSON.parse(stdout));
