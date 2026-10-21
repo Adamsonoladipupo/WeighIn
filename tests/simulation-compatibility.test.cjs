@@ -13,7 +13,7 @@ const {
   rpc,
   xdr,
 } = require("@stellar/stellar-sdk");
-const { runMeasurement } = require("../dist/measurement");
+const { isContractDeployed, runMeasurement } = require("../dist/measurement");
 const base = require("./fixtures/stage1b/base-simulation.json");
 const head = require("./fixtures/stage1b/head-simulation.json");
 const control = require("./fixtures/stage1b/control-simulation.json");
@@ -112,6 +112,38 @@ function calculateContractId(deployerAddress, salt) {
   const contractIdBytes = hash(hashIdPreimage.toXDR());
   return StrKey.encodeContract(contractIdBytes);
 }
+
+test("deployment probe accepts the SDK-parsed ledger entry XDR objects", async () => {
+  const keypair = Keypair.random();
+  const contractId = calculateContractId(
+    keypair.publicKey(),
+    crypto.createHash("sha256").update("sdk-ledger-entry-test").digest(),
+  );
+  const contractAddress = Address.fromString(contractId).toScAddress();
+  const ledgerKey = xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: contractAddress,
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+    }),
+  );
+  const entry = xdr.LedgerEntryData.contractData(
+    new xdr.ContractDataEntry({
+      ext: new xdr.ExtensionPoint(0),
+      contract: contractAddress,
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+      val: xdr.ScVal.scvBool(true),
+    }),
+  );
+  const server = {
+    getLedgerEntries: async () => ({
+      entries: [{ key: ledgerKey, val: entry }],
+    }),
+  };
+
+  assert.equal(await isContractDeployed(server, contractId), true);
+});
 
 // Replay captured responses through the public measurement entry point.
 // RPC transport is isolated here; these tests do not claim a live measurement.

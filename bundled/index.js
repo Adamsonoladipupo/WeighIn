@@ -54597,8 +54597,9 @@ async function isContractDeployed(server, contractId) {
         `Deployment probe returned a malformed entry for ${contractId}: ${JSON.stringify(entry)}`
       );
     }
-    const entryKey = typeof entry.key === "string" ? entry.key : void 0;
-    const entryXdr = typeof entry.xdr === "string" ? entry.xdr : void 0;
+    const entryKey = typeof entry.key === "string" ? entry.key : typeof entry.key?.toXDR === "function" ? entry.key.toXDR("base64") : void 0;
+    const entryValue = entry.xdr ?? entry.val;
+    const entryXdr = typeof entryValue === "string" ? entryValue : typeof entryValue?.toXDR === "function" ? entryValue.toXDR("base64") : void 0;
     if (typeof entryKey !== "string" || typeof entryXdr !== "string") {
       throw new Error(
         `Deployment probe returned a missing key/xdr payload for ${contractId}: ${JSON.stringify(entry)}`

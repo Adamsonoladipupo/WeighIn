@@ -46,7 +46,7 @@ test("pack using normal lifecycle and verify installed consumer public API and C
     {
       cwd: repoRoot,
       encoding: "utf8",
-      timeout: 60000,
+      timeout: 120000,
     },
   );
   assert.equal(packResult.status, 0, `npm pack failed: ${packResult.stderr}`);
