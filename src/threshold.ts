@@ -304,11 +304,11 @@ export function enforceThresholds(
     Boolean(config?.aggregates && Object.keys(config.aggregates).length > 0) ||
     Boolean(
       config?.limits?.aggregates &&
-        Object.keys(config.limits.aggregates).length > 0,
+      Object.keys(config.limits.aggregates).length > 0,
     ) ||
     Boolean(
       config?.thresholds?.aggregates &&
-        Object.keys(config.thresholds.aggregates).length > 0,
+      Object.keys(config.thresholds.aggregates).length > 0,
     );
 
   if (hasAggregatesConfig) {
