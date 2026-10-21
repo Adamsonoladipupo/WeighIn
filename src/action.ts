@@ -29,6 +29,13 @@ import {
   SUPPORTED_NETWORK_PASSPHRASE,
   SUPPORTED_PROTOCOL_VERSION,
 } from "./network";
+import {
+  isWorkspaceClean,
+  getModifiedFiles,
+  getHeadSha,
+  capture,
+  captureRaw,
+} from "./git-utils";
 
 // The configured endpoint is tracked only so the terminal failure path can
 // redact any credential it may contain before reporting.
@@ -201,43 +208,6 @@ function resolveRevisionFixturesPath(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Run a command and capture stdout. Throws on non-zero exit. */
-async function capture(
-  cmd: string,
-  args: string[],
-  cwd?: string,
-): Promise<string> {
-  let out = "";
-  await exec.exec(cmd, args, {
-    cwd,
-    listeners: {
-      stdout: (d: Buffer) => {
-        out += d.toString();
-      },
-    },
-    silent: true,
-  });
-  return out.trim();
-}
-
-async function captureRaw(
-  cmd: string,
-  args: string[],
-  cwd?: string,
-): Promise<string> {
-  let out = "";
-  await exec.exec(cmd, args, {
-    cwd,
-    silent: true,
-    listeners: {
-      stdout: (d: Buffer) => {
-        out += d.toString();
-      },
-    },
-  });
-  return out;
-}
-
 async function loadPolicy(
   repoDir: string,
   configPathRel: string,
@@ -288,15 +258,6 @@ async function loadPolicy(
       content_sha256: policyContentSha256(content),
     },
   };
-}
-
-/** Get HEAD SHA in the given directory. */
-async function getHeadSha(dir: string): Promise<string> {
-  try {
-    return await capture("git", ["rev-parse", "HEAD"], dir);
-  } catch {
-    return "unknown";
-  }
 }
 
 /** Read soroban-sdk version from Cargo.lock (best-effort). */
@@ -491,6 +452,15 @@ async function run(): Promise<void> {
     core.startGroup("Building + measuring HEAD");
     const headSha = await getHeadSha(headWorkspace);
     core.info(`HEAD SHA: ${headSha}`);
+
+    // Check for uncommitted changes to ensure benchmarks reflect the reported HEAD
+    const isClean = await isWorkspaceClean(headWorkspace);
+    if (!isClean) {
+      const modifiedFiles = await getModifiedFiles(headWorkspace);
+      throw new Error(
+        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:\n${modifiedFiles.map((f) => `  - ${f}`).join("\n")}\n\nCommit or stash changes before running benchmarks.`,
+      );
+    }
 
     let headResults: ContractBenchmark[];
     try {

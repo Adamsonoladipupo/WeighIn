@@ -202,7 +202,7 @@ var require_file_command = __commonJS({
     Object.defineProperty(exports2, "__esModule", { value: true });
     exports2.issueFileCommand = issueFileCommand;
     exports2.prepareKeyValueMessage = prepareKeyValueMessage;
-    var crypto5 = __importStar(require("crypto"));
+    var crypto6 = __importStar(require("crypto"));
     var fs6 = __importStar(require("fs"));
     var os3 = __importStar(require("os"));
     var utils_1 = require_utils();
@@ -219,7 +219,7 @@ var require_file_command = __commonJS({
       });
     }
     function prepareKeyValueMessage(key, value) {
-      const delimiter = `ghadelimiter_${crypto5.randomUUID()}`;
+      const delimiter = `ghadelimiter_${crypto6.randomUUID()}`;
       const convertedValue = (0, utils_1.toCommandValue)(value);
       if (key.includes(delimiter)) {
         throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
@@ -4301,11 +4301,11 @@ var require_util2 = __commonJS({
     var { isUint8Array } = require("node:util/types");
     var { webidl } = require_webidl();
     var supportedHashes = [];
-    var crypto5;
+    var crypto6;
     try {
-      crypto5 = require("node:crypto");
+      crypto6 = require("node:crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto5.getHashes().filter((hash2) => possibleRelevantHashes.includes(hash2));
+      supportedHashes = crypto6.getHashes().filter((hash2) => possibleRelevantHashes.includes(hash2));
     } catch {
     }
     function responseURL(response) {
@@ -4578,7 +4578,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto5 === void 0) {
+      if (crypto6 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -4593,7 +4593,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto5.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto6.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -5657,8 +5657,8 @@ var require_body = __commonJS({
     var { multipartFormDataParser } = require_formdata_parser();
     var random;
     try {
-      const crypto5 = require("node:crypto");
-      random = (max) => crypto5.randomInt(0, max);
+      const crypto6 = require("node:crypto");
+      random = (max) => crypto6.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -17256,13 +17256,13 @@ var require_frame = __commonJS({
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
     var BUFFER_SIZE = 16386;
-    var crypto5;
+    var crypto6;
     var buffer = null;
     var bufIdx = BUFFER_SIZE;
     try {
-      crypto5 = require("node:crypto");
+      crypto6 = require("node:crypto");
     } catch {
-      crypto5 = {
+      crypto6 = {
         // not full compatibility, but minimum.
         randomFillSync: function randomFillSync(buffer2, _offset, _size) {
           for (let i = 0; i < buffer2.length; ++i) {
@@ -17275,7 +17275,7 @@ var require_frame = __commonJS({
     function generateMask() {
       if (bufIdx === BUFFER_SIZE) {
         bufIdx = 0;
-        crypto5.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
+        crypto6.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
       }
       return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]];
     }
@@ -17347,9 +17347,9 @@ var require_connection = __commonJS({
     var { Headers: Headers2, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
-    var crypto5;
+    var crypto6;
     try {
-      crypto5 = require("node:crypto");
+      crypto6 = require("node:crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, client, ws, onEstablish, options) {
@@ -17369,7 +17369,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers2(options.headers));
         request3.headersList = headersList;
       }
-      const keyValue = crypto5.randomBytes(16).toString("base64");
+      const keyValue = crypto6.randomBytes(16).toString("base64");
       request3.headersList.append("sec-websocket-key", keyValue);
       request3.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -17399,7 +17399,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto5.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto6.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -21452,7 +21452,7 @@ var require_exec = __commonJS({
     exports2.getExecOutput = exports2.exec = void 0;
     var string_decoder_1 = require("string_decoder");
     var tr = __importStar(require_toolrunner());
-    function exec7(commandLine, args, options) {
+    function exec9(commandLine, args, options) {
       return __awaiter2(this, void 0, void 0, function* () {
         const commandArgs = tr.argStringToArray(commandLine);
         if (commandArgs.length === 0) {
@@ -21464,7 +21464,7 @@ var require_exec = __commonJS({
         return runner.exec();
       });
     }
-    exports2.exec = exec7;
+    exports2.exec = exec9;
     function getExecOutput(commandLine, args, options) {
       var _a2, _b;
       return __awaiter2(this, void 0, void 0, function* () {
@@ -21487,7 +21487,7 @@ var require_exec = __commonJS({
           }
         };
         const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
-        const exitCode = yield exec7(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+        const exitCode = yield exec9(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
         stdout += stdoutDecoder.end();
         stderr += stderrDecoder.end();
         return {
@@ -21576,12 +21576,12 @@ var require_platform = __commonJS({
     exports2.isLinux = exports2.isMacOS = exports2.isWindows = exports2.arch = exports2.platform = void 0;
     exports2.getDetails = getDetails;
     var os_1 = __importDefault(require("os"));
-    var exec7 = __importStar(require_exec());
+    var exec9 = __importStar(require_exec());
     var getWindowsInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
-      const { stdout: version2 } = yield exec7.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', void 0, {
+      const { stdout: version2 } = yield exec9.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', void 0, {
         silent: true
       });
-      const { stdout: name } = yield exec7.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Caption"', void 0, {
+      const { stdout: name } = yield exec9.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Caption"', void 0, {
         silent: true
       });
       return {
@@ -21591,7 +21591,7 @@ var require_platform = __commonJS({
     });
     var getMacOsInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
       var _a2, _b, _c, _d2;
-      const { stdout } = yield exec7.getExecOutput("sw_vers", void 0, {
+      const { stdout } = yield exec9.getExecOutput("sw_vers", void 0, {
         silent: true
       });
       const version2 = (_b = (_a2 = stdout.match(/ProductVersion:\s*(.+)/)) === null || _a2 === void 0 ? void 0 : _a2[1]) !== null && _b !== void 0 ? _b : "";
@@ -21602,7 +21602,7 @@ var require_platform = __commonJS({
       };
     });
     var getLinuxInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
-      const { stdout } = yield exec7.getExecOutput("lsb_release", ["-i", "-r", "-s"], {
+      const { stdout } = yield exec9.getExecOutput("lsb_release", ["-i", "-r", "-s"], {
         silent: true
       });
       const [name, version2] = stdout.trim().split("\n");
@@ -21712,7 +21712,7 @@ var require_core = __commonJS({
     exports2.isDebug = isDebug;
     exports2.debug = debug;
     exports2.error = error2;
-    exports2.warning = warning2;
+    exports2.warning = warning3;
     exports2.notice = notice;
     exports2.info = info4;
     exports2.startGroup = startGroup2;
@@ -21805,7 +21805,7 @@ Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
     function error2(message, properties = {}) {
       (0, command_1.issueCommand)("error", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
-    function warning2(message, properties = {}) {
+    function warning3(message, properties = {}) {
       (0, command_1.issueCommand)("warning", (0, utils_1.toCommandProperties)(properties), message instanceof Error ? message.toString() : message);
     }
     function notice(message, properties = {}) {
@@ -31113,7 +31113,7 @@ var require_toml = __commonJS({
 
 // src/action.ts
 var core3 = __toESM(require_core());
-var exec5 = __toESM(require_exec());
+var exec7 = __toESM(require_exec());
 init_github();
 var fs5 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
@@ -35243,7 +35243,8 @@ var PROVENANCE_ALLOWED_KEYS = /* @__PURE__ */ new Set([
   "seed",
   "auth_mode",
   "host_features",
-  "resource_limits_sha256"
+  "resource_limits_sha256",
+  "source_account"
 ]);
 var PROVENANCE_REQUIRED_STRINGS = [
   "source",
@@ -35259,6 +35260,7 @@ var PROVENANCE_REQUIRED_STRINGS = [
 ];
 var METRIC_KEY_SET = new Set(METRIC_KEYS);
 var SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+var ACCOUNT_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
 function isPlainObject3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -35344,6 +35346,14 @@ function validateProvenanceObject(provenance, version2, pPath, diagnostics) {
       version: version2,
       code: "INVALID_RESOURCE_LIMITS_DIGEST",
       message: "Schema 4 requires resource_limits_sha256"
+    });
+  }
+  if (provenance.source_account !== void 0 && (typeof provenance.source_account !== "string" || !ACCOUNT_PUBLIC_KEY_PATTERN.test(provenance.source_account))) {
+    diagnostics.push({
+      path: `${pPath}.source_account`,
+      version: version2,
+      code: "INVALID_SOURCE_ACCOUNT",
+      message: "Invalid compute provenance: source_account must be an Ed25519 account public key"
     });
   }
 }
@@ -35770,7 +35780,10 @@ function validateBenchmarkComparisonCompatibility(baseFn, headFn) {
     "compute_config_sha256",
     "seed",
     "auth_mode",
-    "host_features"
+    "host_features",
+    // The invoking account is part of the measured environment: results
+    // measured under different source accounts are not comparable.
+    "source_account"
   ];
   for (const field of fields) {
     if (!baseFn.provenance || !headFn.provenance || JSON.stringify(baseFn.provenance[field]) !== JSON.stringify(headFn.provenance[field])) {
@@ -53433,13 +53446,22 @@ function captureHelperIdentity(helperPath) {
   }
 }
 async function simulateSnapshot(input, helperPath, signal) {
-  const stdout = await execute(
-    helperPath,
-    [],
-    JSON.stringify(input),
-    void 0,
-    signal
-  );
+  let stdout;
+  try {
+    stdout = await execute(
+      helperPath,
+      [],
+      JSON.stringify(input),
+      void 0,
+      signal
+    );
+  } catch (failure) {
+    const envelope = parseHelperFailure(failure);
+    if (envelope) {
+      throw new Error(`Native helper ${envelope.status}: ${envelope.message}`);
+    }
+    throw failure;
+  }
   let output;
   try {
     output = outputSchema.parse(JSON.parse(stdout));
@@ -53961,7 +53983,8 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
         input_sha256: sha2562(JSON.stringify(input)),
         seed: input.seed,
         auth_mode: output.auth_mode,
-        host_features: output.host_features
+        host_features: output.host_features,
+        source_account: transaction.source
       }
     };
   }
@@ -54059,6 +54082,18 @@ function metricsFromSimulation(output, limits) {
       "ConfigSettingContractEventsV0.txMaxContractEventsSizeBytes"
     )
   };
+}
+function normalizeSourceAccount(publicKey) {
+  if (typeof publicKey !== "string" || !publicKey.trim()) {
+    throw new Error("Invalid invocation source account: expected a public key");
+  }
+  const trimmed = publicKey.trim();
+  if (!StrKey.isValidEd25519PublicKey(trimmed)) {
+    throw new Error(
+      "Invalid invocation source account: expected an Ed25519 account public key (G...)"
+    );
+  }
+  return trimmed;
 }
 function toScVal(arg) {
   const type = arg.type.toLowerCase();
@@ -54280,6 +54315,104 @@ async function isContractDeployed(server, contractId) {
     return false;
   }
 }
+function resolveContractWasmPath(fixturesDir, wasmPath) {
+  let resolved = path3.resolve(fixturesDir, wasmPath);
+  if (!fs2.existsSync(resolved)) {
+    let altPath = "";
+    if (resolved.includes("wasm32-unknown-unknown")) {
+      altPath = resolved.replace("wasm32-unknown-unknown", "wasm32v1-none");
+    } else if (resolved.includes("wasm32v1-none")) {
+      altPath = resolved.replace("wasm32v1-none", "wasm32-unknown-unknown");
+    }
+    if (altPath && fs2.existsSync(altPath)) {
+      resolved = altPath;
+    } else {
+      throw new Error(
+        `WASM not found: ${resolved}
+Build the contract before running measurements.`
+      );
+    }
+  }
+  return resolved;
+}
+async function ensureContractDeployed(options) {
+  const { server, deployer, deployerAddress, wasmBytes, wasmHash, salt } = options;
+  const deployed = await isContractDeployed(server, options.contractId);
+  if (deployed) {
+    console.log(`Already deployed at ${options.contractId}`);
+    return;
+  }
+  console.log(`Installing WASM...`);
+  let account = await server.getAccount(deployer.publicKey());
+  const uploadTx = new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+  }).addOperation(Operation.uploadContractWasm({ wasm: wasmBytes })).setTimeout(30).build();
+  let preparedUpload;
+  try {
+    preparedUpload = await server.prepareTransaction(uploadTx);
+  } catch (err) {
+    console.error(
+      `WASM upload preparation failed at ${sanitizeEndpoint(options.rpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), options.rpcUrl)}`
+    );
+    throw err;
+  }
+  preparedUpload.sign(deployer);
+  await submitAndConfirm(
+    server,
+    preparedUpload,
+    "WASM upload",
+    options.rpcUrl,
+    options.signal
+  );
+  console.log(`WASM installed. Deploying contract instance...`);
+  account = await server.getAccount(deployer.publicKey());
+  const createTx = new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+  }).addOperation(
+    Operation.createCustomContract({
+      wasmHash,
+      address: deployerAddress,
+      salt
+    })
+  ).setTimeout(30).build();
+  const preparedCreate = await server.prepareTransaction(createTx);
+  preparedCreate.sign(deployer);
+  await submitAndConfirm(
+    server,
+    preparedCreate,
+    "contract creation",
+    options.rpcUrl,
+    options.signal
+  );
+  console.log(`Deployed at ${options.contractId}`);
+}
+async function buildInvocationTransaction(options) {
+  const { server, sourceAccount, contractId, invocation } = options;
+  if (options.signal?.aborted) {
+    throw options.signal.reason || new Error("Measurement cancelled");
+  }
+  let account;
+  try {
+    account = await server.getAccount(sourceAccount);
+  } catch (err) {
+    throw new Error(
+      `Invocation source account is not available on the network: ${sourceAccount} (${redactEndpointSecrets(String(err?.message ?? err), options.rpcUrl)})`
+    );
+  }
+  const argsSc = invocation.args.map(toScVal);
+  return new TransactionBuilder(account, {
+    fee: "1000000",
+    networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+  }).addOperation(
+    Operation.invokeContractFunction({
+      contract: contractId,
+      function: invocation.function_name,
+      args: argsSc
+    })
+  ).setTimeout(30).build();
+}
 async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcUrl) {
   let opts;
   if (typeof fixturesPathOrOptions === "string") {
@@ -54310,25 +54443,21 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
     opts.signal
   );
   const deployerAddress = Address.fromString(deployer.publicKey());
+  let invocationSourceAccount = deployer.publicKey();
+  if (opts.invocationSourceAccount !== void 0) {
+    invocationSourceAccount = normalizeSourceAccount(
+      opts.invocationSourceAccount
+    );
+    if (invocationSourceAccount !== deployer.publicKey()) {
+      console.log(`Invocation source account: ${invocationSourceAccount}`);
+    }
+  }
   const results = [];
   for (const contractSpec of fixturesSpec.contracts) {
-    let wasmPath = path3.resolve(fixturesDir, contractSpec.wasm_path);
-    if (!fs2.existsSync(wasmPath)) {
-      let altPath = "";
-      if (wasmPath.includes("wasm32-unknown-unknown")) {
-        altPath = wasmPath.replace("wasm32-unknown-unknown", "wasm32v1-none");
-      } else if (wasmPath.includes("wasm32v1-none")) {
-        altPath = wasmPath.replace("wasm32v1-none", "wasm32-unknown-unknown");
-      }
-      if (altPath && fs2.existsSync(altPath)) {
-        wasmPath = altPath;
-      } else {
-        throw new Error(
-          `WASM not found: ${wasmPath}
-Build the contract before running measurements.`
-        );
-      }
-    }
+    const wasmPath = resolveContractWasmPath(
+      fixturesDir,
+      contractSpec.wasm_path
+    );
     const wasmBytes = fs2.readFileSync(wasmPath);
     const wasmHash = crypto3.createHash("sha256").update(wasmBytes).digest();
     const wasmSha256 = wasmHash.toString("hex");
@@ -54337,74 +54466,31 @@ Build the contract before running measurements.`
     const salt = crypto3.createHash("sha256").update(wasmHash).digest();
     const contractId = calculateContractId(deployer.publicKey(), salt);
     console.log(`Contract ID: ${contractId}`);
-    const deployed = await isContractDeployed(server, contractId);
-    if (!deployed) {
-      console.log(`Installing WASM...`);
-      let account = await server.getAccount(deployer.publicKey());
-      const uploadTx = new TransactionBuilder(account, {
-        fee: "1000000",
-        networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
-      }).addOperation(Operation.uploadContractWasm({ wasm: wasmBytes })).setTimeout(30).build();
-      let preparedUpload;
-      try {
-        preparedUpload = await server.prepareTransaction(uploadTx);
-      } catch (err) {
-        console.error(
-          `WASM upload preparation failed at ${sanitizeEndpoint(effectiveRpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), effectiveRpcUrl)}`
-        );
-        throw err;
-      }
-      preparedUpload.sign(deployer);
-      await submitAndConfirm(
-        server,
-        preparedUpload,
-        "WASM upload",
-        effectiveRpcUrl,
-        opts.signal
-      );
-      console.log(`WASM installed. Deploying contract instance...`);
-      account = await server.getAccount(deployer.publicKey());
-      const createTx = new TransactionBuilder(account, {
-        fee: "1000000",
-        networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
-      }).addOperation(
-        Operation.createCustomContract({
-          wasmHash,
-          address: deployerAddress,
-          salt
-        })
-      ).setTimeout(30).build();
-      const preparedCreate = await server.prepareTransaction(createTx);
-      preparedCreate.sign(deployer);
-      await submitAndConfirm(
-        server,
-        preparedCreate,
-        "contract creation",
-        effectiveRpcUrl,
-        opts.signal
-      );
-      console.log(`Deployed at ${contractId}`);
-    } else {
-      console.log(`Already deployed at ${contractId}`);
-    }
+    await ensureContractDeployed({
+      server,
+      deployer,
+      deployerAddress,
+      wasmBytes,
+      wasmHash,
+      salt,
+      contractId,
+      rpcUrl: effectiveRpcUrl,
+      signal: opts.signal
+    });
     const benchmarks = [];
     for (const invokeSpec of contractSpec.invocations) {
       if (opts.signal?.aborted) {
         throw opts.signal.reason || new Error("Measurement cancelled by caller");
       }
       console.log(`Simulating ${invokeSpec.function_name}...`);
-      const account = await server.getAccount(deployer.publicKey());
-      const argsSc = invokeSpec.args.map(toScVal);
-      const invokeTx = new TransactionBuilder(account, {
-        fee: "1000000",
-        networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
-      }).addOperation(
-        Operation.invokeContractFunction({
-          contract: contractId,
-          function: invokeSpec.function_name,
-          args: argsSc
-        })
-      ).setTimeout(30).build();
+      const invokeTx = await buildInvocationTransaction({
+        server,
+        sourceAccount: invocationSourceAccount,
+        contractId,
+        invocation: invokeSpec,
+        rpcUrl: effectiveRpcUrl,
+        signal: opts.signal
+      });
       const simRes = await server.simulateTransaction(invokeTx);
       if (rpc_exports.Api.isSimulationError(simRes)) {
         throw new Error(
@@ -55125,9 +55211,61 @@ async function buildForRevision(fixturesPath, worktreeRoot, rustToolchain, build
 }
 
 // src/report.ts
+var crypto5 = __toESM(require("crypto"));
 var fs4 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
 var core2 = __toESM(require_core());
+var TEMPORARY_FILE_ATTEMPTS = 5;
+function temporaryReportPath(targetPath) {
+  const unique = `${process.pid.toString(36)}-${crypto5.randomBytes(8).toString("hex")}`;
+  return path5.join(
+    path5.dirname(targetPath),
+    `.${path5.basename(targetPath)}.${unique}.tmp`
+  );
+}
+function createOwnedTemporaryFile(targetPath) {
+  let lastError;
+  for (let attempt = 0; attempt < TEMPORARY_FILE_ATTEMPTS; attempt++) {
+    const candidate = temporaryReportPath(targetPath);
+    try {
+      const fd = fs4.openSync(candidate, "wx", 438);
+      return { path: candidate, fd };
+    } catch (error2) {
+      lastError = error2;
+      if (error2?.code !== "EEXIST") throw error2;
+    }
+  }
+  throw lastError;
+}
+function removeOwnedTemporaryFile(temporaryPath) {
+  try {
+    fs4.unlinkSync(temporaryPath);
+  } catch (error2) {
+    if (error2?.code === "ENOENT") return;
+    core2.warning(
+      `Could not remove temporary report file ${temporaryPath}: ${error2.message}`
+    );
+  }
+}
+function writeFileAtomically(targetPath, body) {
+  const temporary = createOwnedTemporaryFile(targetPath);
+  let closed = false;
+  try {
+    fs4.writeFileSync(temporary.fd, body, "utf8");
+    fs4.closeSync(temporary.fd);
+    closed = true;
+    fs4.renameSync(temporary.path, targetPath);
+  } catch (error2) {
+    if (!closed) {
+      try {
+        fs4.closeSync(temporary.fd);
+      } catch {
+      }
+    }
+    removeOwnedTemporaryFile(temporary.path);
+    throw error2;
+  }
+}
 function writeReportFile(reportPathInput, headWorkspace, body) {
   if (!reportPathInput) return;
   const targetPath = path5.resolve(headWorkspace, reportPathInput);
@@ -55136,7 +55274,7 @@ function writeReportFile(reportPathInput, headWorkspace, body) {
     if (!fs4.existsSync(parentDir)) {
       fs4.mkdirSync(parentDir, { recursive: true });
     }
-    fs4.writeFileSync(targetPath, body, "utf8");
+    writeFileAtomically(targetPath, body);
     core2.info(`Wrote Markdown report to ${targetPath}`);
   } catch (err) {
     throw new Error(
@@ -55176,6 +55314,58 @@ function buildPrMetadata(repository, prNumber, headSha) {
     prNumber,
     headSha
   };
+}
+
+// src/git-utils.ts
+var exec5 = __toESM(require_exec());
+async function capture(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    },
+    silent: true
+  });
+  return out.trim();
+}
+async function captureRaw(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    silent: true,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    }
+  });
+  return out;
+}
+async function isWorkspaceClean(dir) {
+  try {
+    const status = await capture("git", ["status", "--porcelain"], dir);
+    return status.trim() === "";
+  } catch {
+    return false;
+  }
+}
+async function getModifiedFiles(dir) {
+  try {
+    const status = await capture("git", ["status", "--porcelain"], dir);
+    return status.split("\n").filter((line) => line.trim()).map((line) => line.substring(3).trim());
+  } catch {
+    return [];
+  }
+}
+async function getHeadSha(dir) {
+  try {
+    return await capture("git", ["rev-parse", "HEAD"], dir);
+  } catch {
+    return "unknown";
+  }
 }
 
 // src/action.ts
@@ -55246,12 +55436,12 @@ async function validateBaseRef(repoRoot, ref) {
     );
   }
   if (/^[0-9a-fA-F]{7,40}$/.test(ref)) return;
-  const branchRef = await exec5.exec(
+  const branchRef = await exec7.exec(
     "git",
     ["check-ref-format", `refs/heads/${ref}`],
     { cwd: repoRoot, ignoreReturnCode: true, silent: true }
   );
-  const tagRef = await exec5.exec(
+  const tagRef = await exec7.exec(
     "git",
     ["check-ref-format", `refs/tags/${ref}`],
     { cwd: repoRoot, ignoreReturnCode: true, silent: true }
@@ -55298,32 +55488,6 @@ function resolveRevisionFixturesPath(worktreeRoot, fixturesPathInput, revision) 
   }
   return resolved;
 }
-async function capture(cmd, args, cwd) {
-  let out = "";
-  await exec5.exec(cmd, args, {
-    cwd,
-    listeners: {
-      stdout: (d) => {
-        out += d.toString();
-      }
-    },
-    silent: true
-  });
-  return out.trim();
-}
-async function captureRaw(cmd, args, cwd) {
-  let out = "";
-  await exec5.exec(cmd, args, {
-    cwd,
-    silent: true,
-    listeners: {
-      stdout: (d) => {
-        out += d.toString();
-      }
-    }
-  });
-  return out;
-}
 async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
   if (!trustedRef && !trustedPath) {
     const configPath = path6.resolve(repoDir, configPathRel || "weighin.toml");
@@ -55368,13 +55532,6 @@ async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
     }
   };
 }
-async function getHeadSha(dir) {
-  try {
-    return await capture("git", ["rev-parse", "HEAD"], dir);
-  } catch {
-    return "unknown";
-  }
-}
 function getSdkVersion(repoDir) {
   for (const rel of ["Cargo.lock", "contract/Cargo.lock"]) {
     const lockPath = path6.join(repoDir, rel);
@@ -55390,13 +55547,13 @@ function getSdkVersion(repoDir) {
   return "unknown";
 }
 async function checkoutRef(repoRoot, ref, label) {
-  await exec5.exec("git", ["fetch", "--depth=1", "origin", ref], {
+  await exec7.exec("git", ["fetch", "--depth=1", "origin", ref], {
     cwd: repoRoot
   });
   const dir = fs5.mkdtempSync(path6.join(os2.tmpdir(), `weighin-${label}-`));
   core3.info(`Checking out ${ref} into ${dir}`);
   try {
-    await exec5.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
+    await exec7.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
       cwd: repoRoot
     });
   } catch (error2) {
@@ -55409,7 +55566,7 @@ async function checkoutRef(repoRoot, ref, label) {
 }
 async function removeWorktree(repoRoot, dir) {
   try {
-    await exec5.exec("git", ["worktree", "remove", "--force", dir], {
+    await exec7.exec("git", ["worktree", "remove", "--force", dir], {
       cwd: repoRoot
     });
   } catch {
@@ -55507,6 +55664,16 @@ async function run() {
     core3.startGroup("Building + measuring HEAD");
     const headSha = await getHeadSha(headWorkspace);
     core3.info(`HEAD SHA: ${headSha}`);
+    const isClean = await isWorkspaceClean(headWorkspace);
+    if (!isClean) {
+      const modifiedFiles = await getModifiedFiles(headWorkspace);
+      throw new Error(
+        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:
+${modifiedFiles.map((f) => `  - ${f}`).join("\n")}
+
+Commit or stash changes before running benchmarks.`
+      );
+    }
     let headResults;
     try {
       await buildForRevision(
