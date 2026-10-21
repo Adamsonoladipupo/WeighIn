@@ -36175,7 +36175,15 @@ function canonical(value) {
   return value;
 }
 function parseFixtures(raw, fixturePath) {
-  const fixtures = FixturesSpecSchema.parse(JSON.parse(raw));
+  let fixtures;
+  try {
+    fixtures = FixturesSpecSchema.parse(JSON.parse(raw));
+  } catch (err) {
+    if (err instanceof ZodError) {
+      throw new Error(formatZodError(err, fixturePath));
+    }
+    throw err;
+  }
   const fixture_id = fixtures.id === void 0 ? `path:${relativePath(fixturePath)}` : `id:${fixtures.id}`;
   const contractIds = /* @__PURE__ */ new Set();
   const contracts = fixtures.contracts.map((contract) => {
