@@ -403,6 +403,20 @@ crossing the ledger threshold (900 → 1000) produces +52,966 CPU, +70,658 memor
 bytes, and +36 event+return bytes (`REPEATABILITY_VARIATION_FOUND`), triggering all 6 configured
 policy violations without suppressing them for an unchanged artifact.
 
+## Source-account effect validation
+
+The [source-account effect proof](source-account-effects.md) measures one contract case under
+three valid source accounts on the pinned protocol-28 standalone network while the contract
+code, the arguments, the protocol, the calibration and the resource limits stay fixed. Durable
+evidence in [source-account-effects](experiments/source-account-effects/) retains the raw RPC
+captures, the native helper replays, the per-metric effects, an identical repeatability control
+and the fail-closed evidence for a malformed key and for an account that is not on the network.
+The source account changed no measured metric in that case
+(`cross_run_comparison_valid: true`), the repeatability control reported no changed metric, and
+the account is now recorded in `provenance.source_account` and compared with the other
+environment identities, so saved records measured under different accounts are reported as
+incompatible instead of being compared.
+
 ## Known boundaries
 
 See [Known limitations](KNOWN_LIMITATIONS.md). [Hosted external validation](hosted-soroban-forge.md)

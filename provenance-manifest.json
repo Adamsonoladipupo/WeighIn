@@ -97,7 +97,7 @@
     },
     {
       "path": "src/measurement.ts",
-      "sha256": "a63ea58a01c7a0d7023213d2f034ab9a25f90c6e7ea4fd75c2b869380d83241f"
+      "sha256": "dda0a808d7d89c9a461c0a9d31d4889bcf43af789b838b28f9942a9479b434a8"
     },
     {
       "path": "src/network.ts",
@@ -109,7 +109,7 @@
     },
     {
       "path": "src/record-schema.ts",
-      "sha256": "207c928ccc2005b97b09e9ea74336abf715b40a7acae55b8e0f895e320c4d10d"
+      "sha256": "dcc5f0e4bc22f02aeb69df0c728b182808dc34ebf1ae068020f271b48466aa73"
     },
     {
       "path": "src/report.ts",
@@ -117,6 +117,11 @@
     },
     {
       "path": "src/simulation.ts",
+      "sha256": "fb7c129787b6df02189f2233a0a9fecaa53b5e914f4d654ad6e951c056fc69a7"
+    },
+    {
+      "path": "src/source-account.ts",
+      "sha256": "ec7c43238e07e030fb8c470d03670c89dce56f7935543e419d0150013ba7ee5b"
       "sha256": "258f241854a08db7eb9e20d50c0f5941fd54cdea1c63f73c2ccc9864d3ebfe90"
     },
     {
