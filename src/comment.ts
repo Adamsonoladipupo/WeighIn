@@ -7,8 +7,7 @@ import {
   BenchmarkIdentity,
   contractLabel,
 } from "./diff";
-import { Violation } from "./threshold";
-import { PolicyOrigin } from "./threshold";
+import { Violation, PolicyOrigin, EffectivePolicyReport } from "./threshold";
 
 export const COMMENT_MARKER = "<!-- weighin-report -->";
 
@@ -250,7 +249,7 @@ export function renderComment(
   violations: Violation[],
   baseRef: string,
   headSha: string,
-  policyOrigin?: PolicyOrigin,
+  policyOrigin?: PolicyOrigin | EffectivePolicyReport,
 ): string {
   const lines: string[] = [];
 
@@ -265,7 +264,44 @@ export function renderComment(
       : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
-  if (policyOrigin) {
+
+  const effectivePolicy =
+    policyOrigin && "status" in policyOrigin
+      ? (policyOrigin as EffectivePolicyReport)
+      : undefined;
+
+  if (effectivePolicy) {
+    if (effectivePolicy.status === "absent") {
+      lines.push(
+        "Policy status: **absent** (no policy configuration found; report-only mode).",
+      );
+      lines.push("");
+    } else if (effectivePolicy.status === "empty") {
+      lines.push(
+        `Policy status: **loaded-empty** from **${effectivePolicy.mode ?? "head"}** \`${effectivePolicy.path ?? "weighin.toml"}\` at \`${effectivePolicy.revision ?? "unknown"}\`; content SHA256 \`${effectivePolicy.content_sha256 ?? ""}\` (no threshold rules configured; report-only mode).`,
+      );
+      lines.push("");
+    } else {
+      lines.push(
+        `Policy source: **${effectivePolicy.mode}** \`${effectivePolicy.path}\` at \`${effectivePolicy.revision}\`; content SHA256 \`${effectivePolicy.content_sha256}\`.`,
+      );
+      lines.push("");
+      if (effectivePolicy.rules.length > 0) {
+        lines.push("<details><summary>Effective Policy Rules</summary>");
+        lines.push("");
+        lines.push("| Target | Metric | Effective Rule | Source |");
+        lines.push("| :--- | :--- | :--- | :--- |");
+        for (const r of effectivePolicy.rules) {
+          lines.push(
+            `| \`${r.target}\` | ${METRIC_LABELS[r.metric] ?? r.metric} | \`${r.rule}\` | ${r.source} |`,
+          );
+        }
+        lines.push("");
+        lines.push("</details>");
+        lines.push("");
+      }
+    }
+  } else if (policyOrigin) {
     lines.push(
       `Policy source: **${policyOrigin.mode}** \`${policyOrigin.path}\` at \`${policyOrigin.revision}\`; content SHA256 \`${policyOrigin.content_sha256}\`.`,
     );
@@ -376,28 +412,29 @@ export function renderComment(
   return lines.join("\n");
 }
 
+import { ReportEvaluationResult } from "./report";
 
-import { ReportEvaluationResult } from './report';
-
-export function renderComment(evaluation: ReportEvaluationResult): string {
-  let badge = '🟢 All thresholds passed';
-  let header = '### WeighIn Performance Report';
+export function renderEvaluationComment(
+  evaluation: ReportEvaluationResult,
+): string {
+  let badge = "🟢 All thresholds passed";
+  let header = "### WeighIn Performance Report";
 
   switch (evaluation.state) {
-    case 'report-only':
-      badge = '🔵 Report-Only Execution (Thresholds Passed)';
+    case "report-only":
+      badge = "🔵 Report-Only Execution (Thresholds Passed)";
       break;
-    case 'passed':
-      badge = '🟢 All Thresholds Passed';
+    case "passed":
+      badge = "🟢 All Thresholds Passed";
       break;
-    case 'violated':
+    case "violated":
       badge = `🔴 Policy Violated (${evaluation.violationsCount} failure(s))`;
       break;
-    case 'absent':
-      badge = '⚪ Absent Policy (Informational Report)';
+    case "absent":
+      badge = "⚪ Absent Policy (Informational Report)";
       break;
-    case 'empty':
-      badge = '🟡 Loaded-Empty Policy Evaluation';
+    case "empty":
+      badge = "🟡 Loaded-Empty Policy Evaluation";
       break;
   }
 

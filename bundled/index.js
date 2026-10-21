@@ -21452,7 +21452,7 @@ var require_exec = __commonJS({
     exports2.getExecOutput = exports2.exec = void 0;
     var string_decoder_1 = require("string_decoder");
     var tr = __importStar(require_toolrunner());
-    function exec7(commandLine, args, options) {
+    function exec9(commandLine, args, options) {
       return __awaiter2(this, void 0, void 0, function* () {
         const commandArgs = tr.argStringToArray(commandLine);
         if (commandArgs.length === 0) {
@@ -21464,7 +21464,7 @@ var require_exec = __commonJS({
         return runner.exec();
       });
     }
-    exports2.exec = exec7;
+    exports2.exec = exec9;
     function getExecOutput(commandLine, args, options) {
       var _a2, _b;
       return __awaiter2(this, void 0, void 0, function* () {
@@ -21487,7 +21487,7 @@ var require_exec = __commonJS({
           }
         };
         const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
-        const exitCode = yield exec7(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+        const exitCode = yield exec9(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
         stdout += stdoutDecoder.end();
         stderr += stderrDecoder.end();
         return {
@@ -21576,12 +21576,12 @@ var require_platform = __commonJS({
     exports2.isLinux = exports2.isMacOS = exports2.isWindows = exports2.arch = exports2.platform = void 0;
     exports2.getDetails = getDetails;
     var os_1 = __importDefault(require("os"));
-    var exec7 = __importStar(require_exec());
+    var exec9 = __importStar(require_exec());
     var getWindowsInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
-      const { stdout: version2 } = yield exec7.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', void 0, {
+      const { stdout: version2 } = yield exec9.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Version"', void 0, {
         silent: true
       });
-      const { stdout: name } = yield exec7.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Caption"', void 0, {
+      const { stdout: name } = yield exec9.getExecOutput('powershell -command "(Get-CimInstance -ClassName Win32_OperatingSystem).Caption"', void 0, {
         silent: true
       });
       return {
@@ -21591,7 +21591,7 @@ var require_platform = __commonJS({
     });
     var getMacOsInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
       var _a2, _b, _c, _d2;
-      const { stdout } = yield exec7.getExecOutput("sw_vers", void 0, {
+      const { stdout } = yield exec9.getExecOutput("sw_vers", void 0, {
         silent: true
       });
       const version2 = (_b = (_a2 = stdout.match(/ProductVersion:\s*(.+)/)) === null || _a2 === void 0 ? void 0 : _a2[1]) !== null && _b !== void 0 ? _b : "";
@@ -21602,7 +21602,7 @@ var require_platform = __commonJS({
       };
     });
     var getLinuxInfo = () => __awaiter2(void 0, void 0, void 0, function* () {
-      const { stdout } = yield exec7.getExecOutput("lsb_release", ["-i", "-r", "-s"], {
+      const { stdout } = yield exec9.getExecOutput("lsb_release", ["-i", "-r", "-s"], {
         silent: true
       });
       const [name, version2] = stdout.trim().split("\n");
@@ -31113,7 +31113,7 @@ var require_toml = __commonJS({
 
 // src/action.ts
 var core3 = __toESM(require_core());
-var exec5 = __toESM(require_exec());
+var exec7 = __toESM(require_exec());
 init_github();
 var fs5 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
@@ -54454,6 +54454,7 @@ Build the contract before running measurements.`
   }
   return results;
 }
+var MAX_PROTOCOL_EVENT_BYTES = 64 * 1024 * 1024;
 
 // src/threshold.ts
 var TOML = __toESM(require_toml());
@@ -54671,6 +54672,103 @@ function enforceThresholds(diff, config2) {
   }
   return violations;
 }
+function resolveEffectivePolicy(diff, config2, origin) {
+  if (!config2) {
+    return {
+      status: "absent",
+      report_only: true,
+      rules: []
+    };
+  }
+  const global2 = config2.thresholds?.global ?? {};
+  const perFunction = config2.thresholds?.functions ?? {};
+  const globalLimits = config2.limits?.global ?? {};
+  const functionLimits = config2.limits?.functions ?? {};
+  const hasRules = Boolean(global2.fail_on_any_regression) || GLOBAL_RULE_MAP.some(({ field }) => global2[field] !== void 0) || Object.keys(perFunction).length > 0 || Object.keys(globalLimits).length > 0 || Object.keys(functionLimits).length > 0;
+  if (!hasRules) {
+    return {
+      status: "empty",
+      mode: origin?.mode,
+      path: origin?.path,
+      revision: origin?.revision,
+      content_sha256: origin?.content_sha256,
+      report_only: true,
+      rules: []
+    };
+  }
+  const rules = [];
+  for (const [metric, limit] of Object.entries(globalLimits)) {
+    if (limit !== void 0) {
+      rules.push({
+        target: "global",
+        metric,
+        rule: `absolute_limit(${limit})`,
+        source: "global"
+      });
+    }
+  }
+  if (global2.fail_on_any_regression) {
+    for (const key of METRIC_KEYS) {
+      rules.push({
+        target: "global",
+        metric: key,
+        rule: "fail_on_any_regression",
+        source: "global"
+      });
+    }
+  }
+  for (const { field, metric, toRule } of GLOBAL_RULE_MAP) {
+    const val = global2[field];
+    if (typeof val === "number") {
+      rules.push({
+        target: "global",
+        metric,
+        rule: toRule(val),
+        source: "global"
+      });
+    }
+  }
+  for (const contract of diff.contracts) {
+    for (const fn of contract.functions) {
+      const fnLimits = functionLimits[fn.function_name];
+      if (fnLimits) {
+        for (const [metric, limit] of Object.entries(fnLimits)) {
+          if (limit !== void 0) {
+            rules.push({
+              target: fn.function_name,
+              metric,
+              rule: `absolute_limit(${limit})`,
+              source: "function_override"
+            });
+          }
+        }
+      }
+      const fnOverrides = perFunction[fn.function_name];
+      if (fnOverrides) {
+        for (const [metric, ruleVal] of Object.entries(fnOverrides)) {
+          if (ruleVal !== void 0) {
+            rules.push({
+              target: fn.function_name,
+              metric,
+              rule: ruleVal,
+              source: ruleVal === "ignore" ? "ignore" : "function_override"
+            });
+          }
+        }
+      }
+    }
+  }
+  return {
+    status: "active",
+    mode: origin?.mode,
+    path: origin?.path,
+    revision: origin?.revision,
+    content_sha256: origin?.content_sha256,
+    report_only: false,
+    fail_on_any_regression: global2.fail_on_any_regression,
+    rules
+  };
+}
 
 // src/comment.ts
 var COMMENT_MARKER = "<!-- weighin-report -->";
@@ -54800,7 +54898,39 @@ function renderComment(diff, violations, baseRef, headSha, policyOrigin) {
   const statusText = sortedViolations.length > 0 ? `**${sortedViolations.length} threshold violation${sortedViolations.length > 1 ? "s" : ""}**` : "**All thresholds passed**";
   lines.push(`## ${statusEmoji} WeighIn Benchmark Report`);
   lines.push("");
-  if (policyOrigin) {
+  const effectivePolicy = policyOrigin && "status" in policyOrigin ? policyOrigin : void 0;
+  if (effectivePolicy) {
+    if (effectivePolicy.status === "absent") {
+      lines.push(
+        "Policy status: **absent** (no policy configuration found; report-only mode)."
+      );
+      lines.push("");
+    } else if (effectivePolicy.status === "empty") {
+      lines.push(
+        `Policy status: **loaded-empty** from **${effectivePolicy.mode ?? "head"}** \`${effectivePolicy.path ?? "weighin.toml"}\` at \`${effectivePolicy.revision ?? "unknown"}\`; content SHA256 \`${effectivePolicy.content_sha256 ?? ""}\` (no threshold rules configured; report-only mode).`
+      );
+      lines.push("");
+    } else {
+      lines.push(
+        `Policy source: **${effectivePolicy.mode}** \`${effectivePolicy.path}\` at \`${effectivePolicy.revision}\`; content SHA256 \`${effectivePolicy.content_sha256}\`.`
+      );
+      lines.push("");
+      if (effectivePolicy.rules.length > 0) {
+        lines.push("<details><summary>Effective Policy Rules</summary>");
+        lines.push("");
+        lines.push("| Target | Metric | Effective Rule | Source |");
+        lines.push("| :--- | :--- | :--- | :--- |");
+        for (const r of effectivePolicy.rules) {
+          lines.push(
+            `| \`${r.target}\` | ${METRIC_LABELS[r.metric] ?? r.metric} | \`${r.rule}\` | ${r.source} |`
+          );
+        }
+        lines.push("");
+        lines.push("</details>");
+        lines.push("");
+      }
+    }
+  } else if (policyOrigin) {
     lines.push(
       `Policy source: **${policyOrigin.mode}** \`${policyOrigin.path}\` at \`${policyOrigin.revision}\`; content SHA256 \`${policyOrigin.content_sha256}\`.`
     );
@@ -55239,6 +55369,58 @@ function buildPrMetadata(repository, prNumber, headSha) {
   };
 }
 
+// src/git-utils.ts
+var exec5 = __toESM(require_exec());
+async function capture(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    },
+    silent: true
+  });
+  return out.trim();
+}
+async function captureRaw(cmd, args, cwd) {
+  let out = "";
+  await exec5.exec(cmd, args, {
+    cwd,
+    silent: true,
+    listeners: {
+      stdout: (d) => {
+        out += d.toString();
+      }
+    }
+  });
+  return out;
+}
+async function isWorkspaceClean(dir) {
+  try {
+    const status = await capture("git", ["status", "--porcelain"], dir);
+    return status.trim() === "";
+  } catch {
+    return false;
+  }
+}
+async function getModifiedFiles(dir) {
+  try {
+    const status = await capture("git", ["status", "--porcelain"], dir);
+    return status.split("\n").filter((line) => line.trim()).map((line) => line.substring(3).trim());
+  } catch {
+    return [];
+  }
+}
+async function getHeadSha(dir) {
+  try {
+    return await capture("git", ["rev-parse", "HEAD"], dir);
+  } catch {
+    return "unknown";
+  }
+}
+
 // src/action.ts
 var configuredRpcUrl = "";
 var validatedDiffJson = null;
@@ -55307,12 +55489,12 @@ async function validateBaseRef(repoRoot, ref) {
     );
   }
   if (/^[0-9a-fA-F]{7,40}$/.test(ref)) return;
-  const branchRef = await exec5.exec(
+  const branchRef = await exec7.exec(
     "git",
     ["check-ref-format", `refs/heads/${ref}`],
     { cwd: repoRoot, ignoreReturnCode: true, silent: true }
   );
-  const tagRef = await exec5.exec(
+  const tagRef = await exec7.exec(
     "git",
     ["check-ref-format", `refs/tags/${ref}`],
     { cwd: repoRoot, ignoreReturnCode: true, silent: true }
@@ -55359,32 +55541,6 @@ function resolveRevisionFixturesPath(worktreeRoot, fixturesPathInput, revision) 
   }
   return resolved;
 }
-async function capture(cmd, args, cwd) {
-  let out = "";
-  await exec5.exec(cmd, args, {
-    cwd,
-    listeners: {
-      stdout: (d) => {
-        out += d.toString();
-      }
-    },
-    silent: true
-  });
-  return out.trim();
-}
-async function captureRaw(cmd, args, cwd) {
-  let out = "";
-  await exec5.exec(cmd, args, {
-    cwd,
-    silent: true,
-    listeners: {
-      stdout: (d) => {
-        out += d.toString();
-      }
-    }
-  });
-  return out;
-}
 async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
   if (!trustedRef && !trustedPath) {
     const configPath = path6.resolve(repoDir, configPathRel || "weighin.toml");
@@ -55429,13 +55585,6 @@ async function loadPolicy(repoDir, configPathRel, trustedRef, trustedPath) {
     }
   };
 }
-async function getHeadSha(dir) {
-  try {
-    return await capture("git", ["rev-parse", "HEAD"], dir);
-  } catch {
-    return "unknown";
-  }
-}
 function getSdkVersion(repoDir) {
   for (const rel of ["Cargo.lock", "contract/Cargo.lock"]) {
     const lockPath = path6.join(repoDir, rel);
@@ -55451,13 +55600,13 @@ function getSdkVersion(repoDir) {
   return "unknown";
 }
 async function checkoutRef(repoRoot, ref, label) {
-  await exec5.exec("git", ["fetch", "--depth=1", "origin", ref], {
+  await exec7.exec("git", ["fetch", "--depth=1", "origin", ref], {
     cwd: repoRoot
   });
   const dir = fs5.mkdtempSync(path6.join(os2.tmpdir(), `weighin-${label}-`));
   core3.info(`Checking out ${ref} into ${dir}`);
   try {
-    await exec5.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
+    await exec7.exec("git", ["worktree", "add", "--detach", dir, "FETCH_HEAD"], {
       cwd: repoRoot
     });
   } catch (error2) {
@@ -55470,7 +55619,7 @@ async function checkoutRef(repoRoot, ref, label) {
 }
 async function removeWorktree(repoRoot, dir) {
   try {
-    await exec5.exec("git", ["worktree", "remove", "--force", dir], {
+    await exec7.exec("git", ["worktree", "remove", "--force", dir], {
       cwd: repoRoot
     });
   } catch {
@@ -55568,6 +55717,16 @@ async function run() {
     core3.startGroup("Building + measuring HEAD");
     const headSha = await getHeadSha(headWorkspace);
     core3.info(`HEAD SHA: ${headSha}`);
+    const isClean = await isWorkspaceClean(headWorkspace);
+    if (!isClean) {
+      const modifiedFiles = await getModifiedFiles(headWorkspace);
+      throw new Error(
+        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:
+${modifiedFiles.map((f) => `  - ${f}`).join("\n")}
+
+Commit or stash changes before running benchmarks.`
+      );
+    }
     let headResults;
     try {
       await buildForRevision(
@@ -55675,12 +55834,13 @@ async function run() {
     const result = violations.length > 0 ? "fail" : "pass";
     core3.setOutput("result", result);
     core3.setOutput("diff-json", validatedDiffJson);
+    const effectivePolicy = resolveEffectivePolicy(diff, config2, policy.origin);
     const body = renderComment(
       diff,
       violations,
       baseRef,
       headSha,
-      policy.origin
+      effectivePolicy
     );
     if (process.env.GITHUB_STEP_SUMMARY)
       await core3.summary.addRaw(body).write();

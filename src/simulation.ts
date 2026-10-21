@@ -1123,11 +1123,13 @@ export async function measureInvocation(
   throw exhaustionError;
 }
 
+import {
+  validateSha256Digest,
+  verifyProvenanceRegistryPair,
+  ProvenanceRegistryEntry,
+} from "./diff";
 
-
-import { validateSha256Digest, verifyProvenanceRegistryPair, ProvenanceRegistryEntry } from './diff';
-
-export interface ComputeProvenance {
+export interface SimulationInvocationProvenance {
   producer: string;
   source: string;
   version: string;
@@ -1137,27 +1139,46 @@ export interface ComputeProvenance {
   network_header_snapshot_sha256: string;
 }
 
-export async function measureInvocation(provenance: ComputeProvenance, eventVolumeBytes: number): Promise<{ valid: boolean; report: string }> {
-  validateSha256Digest(provenance.resource_limits_sha256, 'resource_limits_sha256');
-  validateSha256Digest(provenance.input_hash, 'input_hash');
-  validateSha256Digest(provenance.network_header_snapshot_sha256, 'network_header_snapshot_sha256');
+export async function verifySimulationInvocation(
+  provenance: SimulationInvocationProvenance,
+  eventVolumeBytes: number,
+): Promise<{ valid: boolean; report: string }> {
+  validateSha256Digest(
+    provenance.resource_limits_sha256,
+    "resource_limits_sha256",
+  );
+  validateSha256Digest(provenance.input_hash, "input_hash");
+  validateSha256Digest(
+    provenance.network_header_snapshot_sha256,
+    "network_header_snapshot_sha256",
+  );
 
   const entry: ProvenanceRegistryEntry = {
     producer: provenance.producer,
     source: provenance.source,
     version: provenance.version,
-    protocolVersion: provenance.protocol_version
+    protocolVersion: provenance.protocol_version,
   };
 
   if (!verifyProvenanceRegistryPair(entry)) {
-    return { valid: false, report: 'Rejected due to unsupported provenance source/version combination.' };
+    return {
+      valid: false,
+      report:
+        "Rejected due to unsupported provenance source/version combination.",
+    };
   }
 
   const MAX_LIMIT = 64 * 1024 * 1024;
   if (eventVolumeBytes > MAX_LIMIT) {
-    return { valid: false, report: 'Over-limit failure recorded honestly: event volume exceeds protocol cap.' };
+    return {
+      valid: false,
+      report:
+        "Over-limit failure recorded honestly: event volume exceeds protocol cap.",
+    };
   }
 
-  return { valid: true, report: 'Invocation measured successfully within cap boundaries.' };
+  return {
+    valid: true,
+    report: "Invocation measured successfully within cap boundaries.",
+  };
 }
-

@@ -151,12 +151,12 @@ export function generateFailureReport(errorMessage: string): string {
   ].join("\n");
 }
 
-
 /**
  * Report evaluation and policy status structures.
  */
 
-export type PolicyState = 'report-only' | 'passed' | 'violated' | 'absent' | 'empty';
+export type PolicyState =
+  "report-only" | "passed" | "violated" | "absent" | "empty";
 
 export interface ReportEvaluationResult {
   state: PolicyState;
@@ -166,58 +166,62 @@ export interface ReportEvaluationResult {
   message: string;
 }
 
-export function evaluateReportPolicy(policy: any, metrics: any[], reportOnlyMode: boolean = false): ReportEvaluationResult {
+export function evaluateReportPolicy(
+  policy: any,
+  metrics: any[],
+  reportOnlyMode: boolean = false,
+): ReportEvaluationResult {
   const hasPolicy = Boolean(policy && (policy.thresholds || policy.rules));
-  
+
   if (!hasPolicy) {
     return {
-      state: 'absent',
+      state: "absent",
       violationsCount: 0,
       reportOnly: reportOnlyMode,
       hasPolicy: false,
-      message: 'No policy configured (report-only evaluation)'
+      message: "No policy configured (report-only evaluation)",
     };
   }
 
   if (metrics.length === 0) {
     return {
-      state: 'empty',
+      state: "empty",
       violationsCount: 0,
       reportOnly: reportOnlyMode,
       hasPolicy: true,
-      message: 'Loaded-empty policy report'
+      message: "Loaded-empty policy report",
     };
   }
 
   // Evaluate thresholds/rules violations
-  const violations = metrics.filter(m => m.violated === true);
+  const violations = metrics.filter((m) => m.violated === true);
   const violationsCount = violations.length;
 
   if (violationsCount > 0) {
     return {
-      state: 'violated',
+      state: "violated",
       violationsCount,
       reportOnly: reportOnlyMode,
       hasPolicy: true,
-      message: `Policy violated: ${violationsCount} threshold(s) breached`
+      message: `Policy violated: ${violationsCount} threshold(s) breached`,
     };
   }
 
   if (reportOnlyMode) {
     return {
-      state: 'report-only',
+      state: "report-only",
       violationsCount: 0,
       reportOnly: true,
       hasPolicy: true,
-      message: 'Report-only execution: all thresholds passed'
+      message: "Report-only execution: all thresholds passed",
     };
   }
 
   return {
-    state: 'passed',
+    state: "passed",
     violationsCount: 0,
     reportOnly: false,
     hasPolicy: true,
-    message: 'All thresholds passed'
+    message: "All thresholds passed",
   };
 }

@@ -734,11 +734,9 @@ export {
   RecordValidationResult,
 } from "./record-schema";
 
+import { validateSha256Digest } from "./diff";
 
-
-import { validateSha256Digest } from './diff';
-
-export interface ContractBenchmark {
+export interface ContractBenchmarkCapCheck {
   contractId: string;
   resource_limits_sha256: string;
   input_hash: string;
@@ -750,22 +748,32 @@ export interface ContractBenchmark {
 const MAX_PROTOCOL_EVENT_BYTES = 64 * 1024 * 1024; // 64 MB cap reference
 const MAX_PROTOCOL_EVENT_COUNT = 10000;
 
-export async function runMeasurement(benchmark: ContractBenchmark): Promise<{ success: boolean; chargedBytes: number; error?: string }> {
-  validateSha256Digest(benchmark.resource_limits_sha256, 'resource_limits_sha256');
-  validateSha256Digest(benchmark.input_hash, 'input_hash');
-  validateSha256Digest(benchmark.network_header_snapshot_sha256, 'network_header_snapshot_sha256');
+export async function checkBenchmarkEventVolume(
+  benchmark: ContractBenchmarkCapCheck,
+): Promise<{ success: boolean; chargedBytes: number; error?: string }> {
+  validateSha256Digest(
+    benchmark.resource_limits_sha256,
+    "resource_limits_sha256",
+  );
+  validateSha256Digest(benchmark.input_hash, "input_hash");
+  validateSha256Digest(
+    benchmark.network_header_snapshot_sha256,
+    "network_header_snapshot_sha256",
+  );
 
-  if (benchmark.eventBytes > MAX_PROTOCOL_EVENT_BYTES || benchmark.eventCount > MAX_PROTOCOL_EVENT_COUNT) {
+  if (
+    benchmark.eventBytes > MAX_PROTOCOL_EVENT_BYTES ||
+    benchmark.eventCount > MAX_PROTOCOL_EVENT_COUNT
+  ) {
     return {
       success: false,
       chargedBytes: benchmark.eventBytes,
-      error: `Event-volume resource accounting exceeded protocol cap (Bytes: ${benchmark.eventBytes}, Count: ${benchmark.eventCount})`
+      error: `Event-volume resource accounting exceeded protocol cap (Bytes: ${benchmark.eventBytes}, Count: ${benchmark.eventCount})`,
     };
   }
 
   return {
     success: true,
-    chargedBytes: benchmark.eventBytes
+    chargedBytes: benchmark.eventBytes,
   };
 }
-
