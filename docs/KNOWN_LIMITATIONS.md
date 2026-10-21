@@ -48,10 +48,3 @@ are a snapshot, not a guarantee against future advisories.
 ## Provenance Source & Version Pairing
 - All contract execution records must match verified producer/source/version/protocol combination entries registered in the protocol registry.
 - Unrecognized or arbitrary non-blank strings are strictly rejected to maintain comparison integrity.
-
-
-# Known Limitations & Protocol Safeguards
-
-- **Setup Execution Fail-Closed Policy**: Setup pipelines immediately abort on the first rejected, timed-out, or failed step, retaining partial receipts as incomplete and bypassing downstream benchmark invocation.
-- **Dependency Graph Validation**: Deployment graphs are strictly verified for cycles, duplicate entries, and missing references prior to transaction submission or resource funding.
-- **Network Isolation**: Default unit test suites operate under strict socket isolation, permitting only local loopback communication unless explicitly configured otherwise.
