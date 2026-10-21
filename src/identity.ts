@@ -83,6 +83,55 @@ export function parseFixtures(
       }
       caseIds.add(key);
       return { ...invocation, case_id };
+
+
+      /**
+ * Identity and reference validation module for WeighIn setup bindings.
+ */
+
+export interface SetupBinding {
+  id: string;
+  producerId?: string;
+  consumerId?: string;
+  isContractRef: boolean;
+  revision: string;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  error?: string;
+  violatingStep?: string;
+}
+
+export function validateSetupReferences(bindings: SetupBinding[]): ValidationResult {
+  const seenIds = new Set<string>();
+  const producedIds = new Set<string>();
+
+  for (const binding of bindings) {
+    if (!binding.id) {
+      return { valid: false, error: 'Binding missing identifier', violatingStep: binding.revision };
+    }
+
+    if (seenIds.has(binding.id)) {
+      return { valid: false, error: `Duplicate binding identifier detected: ${binding.id}`, violatingStep: binding.revision };
+    }
+    seenIds.add(binding.id);
+
+    if (!binding.isContractRef && binding.producerId) {
+      if (!producedIds.has(binding.producerId)) {
+        return {
+          valid: false,
+          error: `Forward or missing reference detected: Consumer references unproduced result ${binding.producerId}`,
+          violatingStep: binding.revision
+        };
+      }
+    }
+
+    producedIds.add(binding.id);
+  }
+
+  return { valid: true };
+}
     });
     return { ...contract, logical_id, invocations };
   });
