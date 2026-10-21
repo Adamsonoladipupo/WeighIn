@@ -55034,6 +55034,68 @@ var path4 = __toESM(require("path"));
 var os = __toESM(require("os"));
 var import_crypto = require("crypto");
 var exec = __toESM(require_exec());
+function snapshotContractInputs(packageDir) {
+  const hashes2 = /* @__PURE__ */ new Map();
+  function scanDir(dir) {
+    if (!fs3.existsSync(dir)) return;
+    const entries = fs3.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "target" || entry.name === "node_modules" || entry.name === ".git") {
+        continue;
+      }
+      const fullPath = path4.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath);
+      } else if (entry.isFile()) {
+        if (entry.name === "Cargo.toml" || entry.name === "Cargo.lock" || entry.name.endsWith(".rs")) {
+          try {
+            const hash2 = (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(fullPath)).digest("hex");
+            hashes2.set(fullPath, hash2);
+          } catch {
+          }
+        }
+      }
+    }
+  }
+  scanDir(packageDir);
+  let current = path4.dirname(packageDir);
+  while (current && current !== packageDir) {
+    const parentToml = path4.join(current, "Cargo.toml");
+    const parentLock = path4.join(current, "Cargo.lock");
+    if (fs3.existsSync(parentToml)) {
+      hashes2.set(
+        parentToml,
+        (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(parentToml)).digest("hex")
+      );
+    }
+    if (fs3.existsSync(parentLock)) {
+      hashes2.set(
+        parentLock,
+        (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(parentLock)).digest("hex")
+      );
+    }
+    if (fs3.existsSync(path4.join(current, ".git"))) break;
+    const parent = path4.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return { packageDir, hashes: hashes2 };
+}
+function assertContractInputsNotMutated(snapshot) {
+  for (const [filePath, expectedHash] of snapshot.hashes.entries()) {
+    if (!fs3.existsSync(filePath)) {
+      throw new Error(
+        `Default contract build mutated tracked inputs: input file was deleted during build: ${filePath}`
+      );
+    }
+    const currentHash = (0, import_crypto.createHash)("sha256").update(fs3.readFileSync(filePath)).digest("hex");
+    if (currentHash !== expectedHash) {
+      throw new Error(
+        `Default contract build mutated tracked inputs: ${path4.basename(filePath)} was modified during build at ${filePath}`
+      );
+    }
+  }
+}
 function verifyBuildStorage(directory, bytes = 1024 * 1024) {
   const probePath = path4.join(directory, ".weighin-storage-probe");
   const expected = Buffer.alloc(bytes, 165);
@@ -55189,6 +55251,9 @@ async function buildContracts(fixturesPath, rustToolchain) {
       }
       try {
         verifyBuildStorage(outputDir);
+        const inputSnapshot = snapshotContractInputs(
+          path4.dirname(pkg.manifest_path)
+        );
         await command(
           "stellar",
           [
@@ -55206,6 +55271,7 @@ async function buildContracts(fixturesPath, rustToolchain) {
           path4.dirname(pkg.manifest_path),
           { ...env, TMPDIR: outputDir, TMP: outputDir, TEMP: outputDir }
         );
+        assertContractInputsNotMutated(inputSnapshot);
         wasm = fs3.readFileSync(
           path4.join(outputDir, `${targetName.replace(/-/g, "_")}.wasm`)
         );
