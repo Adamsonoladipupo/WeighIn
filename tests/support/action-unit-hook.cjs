@@ -113,7 +113,11 @@ Module._load = function (name, parent, ...args) {
           if (command === "git" && argv[0] === "status") {
             options.listeners?.stdout?.(
               Buffer.from(
-                mode === "dirty-head" ? " M contract/src/lib.rs\n" : "",
+                mode === "dirty-head"
+                  ? " M contract/src/lib.rs\n"
+                  : mode === "untracked-head"
+                    ? "?? weighin-report.md\n"
+                    : "",
               ),
             );
             return 0;
