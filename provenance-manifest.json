@@ -5,11 +5,15 @@
   "tools": {
     "node": "v24.11.1",
     "npm": "11.6.2"
+  "source_revision": "6011fbab50662b8f0c309f7dad6137f1f2639b6d",
+  "tools": {
+    "node": "v24.21.0",
+    "npm": "11.19.0"
   },
   "inputs": [
     {
       "path": "action.yml",
-      "sha256": "9ee9d878ff42069d32c50f19cb2c644a19332433e9f153015dde59cfcf514c47"
+      "sha256": "4959bf586903dae49ade34719d0d7e5c41f522d5295383c778d08a354a21bc2a"
     },
     {
       "path": "bundled/comment-action.js",
@@ -18,6 +22,7 @@
     {
       "path": "bundled/index.js",
       "sha256": "1abb8f89ec56f2d35ff9f5ec8fd1bed189ec9a1549543882fabc5bbf297a0523"
+      "sha256": "6c48d0dea10e6311d880cc00e18bdbb9ae9617820abcadd0c73b2aa56d946f07"
     },
     {
       "path": "native/simulation/Cargo.lock",
@@ -29,11 +34,11 @@
     },
     {
       "path": "native/simulation/src/main.rs",
-      "sha256": "9b83079ed0d532d315d4f05295742ba99d3e9731afb9d16fa8b928ac3c5a8e31"
+      "sha256": "c46eaa54dc07ea5aed5ab42481328e630d7b8f595e5198f7c58b468f9949507e"
     },
     {
       "path": "package-lock.json",
-      "sha256": "492e3e9b1bec64039b8ab30976b30ee6dee0b6a1dfdbce6231d49a9e03d7076c"
+      "sha256": "cfa624f2b71dd4e1ac30fb2cd0f95c841c0b88b88367a2b8672a4554b1c133fb"
     },
     {
       "path": "package.json",
@@ -109,7 +114,7 @@
     },
     {
       "path": "src/report.ts",
-      "sha256": "f47e80cb1f72dca555457e2319eafdca7c48a397db0dc7cebc56286bfe6ea46e"
+      "sha256": "531612923e05a8d96b61037d98f3efc179735bfe8a526bcd88dcda1f6b9547c2"
     },
     {
       "path": "src/simulation.ts",
@@ -118,6 +123,7 @@
     {
       "path": "src/source-account.ts",
       "sha256": "ec7c43238e07e030fb8c470d03670c89dce56f7935543e419d0150013ba7ee5b"
+      "sha256": "258f241854a08db7eb9e20d50c0f5941fd54cdea1c63f73c2ccc9864d3ebfe90"
     },
     {
       "path": "src/threshold.ts",
