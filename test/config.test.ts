@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { loadConfig } from "../src/threshold";
+import { loadConfig, loadConfigContent } from "../src/threshold";
 import {
   WeighinConfigSchema,
   RuleValueSchema,
@@ -570,7 +570,7 @@ describe("Shared policy-schema parity table (issue #28)", () => {
     });
   });
 
-  // --- Category 12: file-context diagnostics ---
+  // --- Category 12: file-context diagnostics (issue #27 / issue #28) ---
   describe("file-context diagnostics", () => {
     it("formatZodError includes the file name", () => {
       const result = WeighinConfigSchema.safeParse({ bad_key: true });
@@ -590,6 +590,148 @@ describe("Shared policy-schema parity table (issue #28)", () => {
         expect((err as Error).message).toContain("weighin.toml");
         expect((err as Error).message).toContain("bad_key");
       }
+    });
+
+    // --- Issue #27: validateConfig propagates an explicit filename ---
+    it("validateConfig(value, 'custom-policy.toml') reports the custom filename", () => {
+      try {
+        validateConfig({ bad_key: true }, "custom-policy.toml");
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain("custom-policy.toml");
+        expect((err as Error).message).toContain("bad_key");
+        expect((err as Error).message).not.toContain("weighin.toml");
+      }
+    });
+
+    it("validateConfig(value, 'trusted-policy.toml') reports the second custom filename", () => {
+      try {
+        validateConfig(
+          {
+            thresholds: {
+              functions: { hello: { cpu_instructions: "allow_magic" } },
+            },
+          },
+          "trusted-policy.toml",
+        );
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain("trusted-policy.toml");
+        expect((err as Error).message).not.toContain("weighin.toml");
+      }
+    });
+
+    // --- Issue #27: loadConfig passes the actual path to validateConfig ---
+    it("loadConfig reports the actual config path in schema-validation errors", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`unknown_key = true`);
+      try {
+        loadConfig("configs/my-policy.toml");
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain("configs/my-policy.toml");
+        expect((err as Error).message).toContain("unknown_key");
+      }
+    });
+
+    it("loadConfig reports a second distinct path in schema-validation errors", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`unknown_key = true`);
+      try {
+        loadConfig("policies/strict-policy.toml");
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain("policies/strict-policy.toml");
+        expect((err as Error).message).not.toContain("weighin.toml");
+      }
+    });
+
+    it("loadConfig preserves TOML syntax-error diagnostics with the config path", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(`[bad section`);
+      try {
+        loadConfig("configs/my-policy.toml");
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        // TOML parser errors are wrapped with the path, not the schema message
+        expect((err as Error).message).toContain("configs/my-policy.toml");
+      }
+    });
+
+    // --- Issue #27: loadConfigContent passes the actual source path ---
+    it("loadConfigContent reports the actual source path in schema-validation errors", () => {
+      try {
+        loadConfigContent(
+          "unknown_key = true",
+          "refs/trusted-head/policy.toml",
+        );
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain(
+          "refs/trusted-head/policy.toml",
+        );
+        expect((err as Error).message).toContain("unknown_key");
+      }
+    });
+
+    it("loadConfigContent reports a second distinct source path in schema-validation errors", () => {
+      try {
+        loadConfigContent("unknown_key = true", "org/repo@abc123/policy.toml");
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain("org/repo@abc123/policy.toml");
+        expect((err as Error).message).not.toContain("weighin.toml");
+      }
+    });
+
+    it("loadConfigContent preserves TOML syntax-error diagnostics with the source path", () => {
+      try {
+        loadConfigContent("[bad section", "refs/trusted-head/policy.toml");
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain(
+          "refs/trusted-head/policy.toml",
+        );
+      }
+    });
+
+    // --- Backward compatibility: direct validateConfig(value) still uses 'weighin.toml' ---
+    it("direct validateConfig(value) still uses 'weighin.toml' as default filename", () => {
+      try {
+        validateConfig({ thresholds: { global: { bad_field: true } } });
+        expect.fail("should have thrown");
+      } catch (err: unknown) {
+        expect((err as Error).message).toContain("weighin.toml");
+        expect((err as Error).message).toContain("bad_field");
+      }
+    });
+
+    // --- loadConfig: missing file is report-only (returns null) ---
+    it("loadConfig returns null for missing optional policy file (report-only)", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      expect(loadConfig("nonexistent-policy.toml")).toBeNull();
+    });
+
+    // --- Policy acceptance: valid config still loads correctly ---
+    it("loadConfig with a custom path accepts a valid config", () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        `[thresholds.functions.hello]\ncpu_instructions = "strict_zero_tolerance"\n`,
+      );
+      const config = loadConfig("project/weighin.toml");
+      expect(config?.thresholds?.functions?.hello?.cpu_instructions).toBe(
+        "strict_zero_tolerance",
+      );
+    });
+
+    it("loadConfigContent with a custom source path accepts a valid config", () => {
+      const config = loadConfigContent(
+        `[thresholds.functions.hello]\ncpu_instructions = "strict_zero_tolerance"\n`,
+        "refs/trusted-branch/policy.toml",
+      );
+      expect(config?.thresholds?.functions?.hello?.cpu_instructions).toBe(
+        "strict_zero_tolerance",
+      );
     });
   });
 });

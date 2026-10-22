@@ -55,7 +55,7 @@ export function loadConfig(configPath: string): WeighinConfig | null {
   }
   const raw = fs.readFileSync(configPath, "utf8");
   try {
-    return validateConfig(TOML.parse(raw));
+    return validateConfig(TOML.parse(raw), configPath);
   } catch (error: any) {
     if (
       error instanceof Error &&
@@ -72,7 +72,7 @@ export function loadConfigContent(
   sourcePath: string,
 ): WeighinConfig {
   try {
-    return validateConfig(TOML.parse(content));
+    return validateConfig(TOML.parse(content), sourcePath);
   } catch (error: any) {
     if (
       error instanceof Error &&

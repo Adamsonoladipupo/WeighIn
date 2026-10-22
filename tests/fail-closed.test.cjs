@@ -266,6 +266,124 @@ test("schema parity: formatZodError includes file context in error message", () 
   );
 });
 
+// ---------------------------------------------------------------------------
+// Issue #27: loadConfig / loadConfigContent report the actual policy filename
+// ---------------------------------------------------------------------------
+const { loadConfigContent } = require("../dist/threshold");
+const tmpDirForIssue27 = os.tmpdir();
+
+// 1. Invalid schema from a custom filename reports that filename + failing key
+test("issue #27: loadConfig schema error reports actual policy path (first path)", () => {
+  const policyPath = path.join(tmpDirForIssue27, "weighin-custom-a.toml");
+  fs.writeFileSync(policyPath, "unknown_key = true\n");
+  assert.throws(
+    () => loadConfig(policyPath),
+    (err) => {
+      assert.match(err.message, /weighin-custom-a\.toml/);
+      assert.match(err.message, /unknown_key/);
+      return true;
+    },
+  );
+  fs.unlinkSync(policyPath);
+});
+
+// 2. Invalid schema from a second, different filename reports the second filename
+test("issue #27: loadConfig schema error reports actual policy path (second path)", () => {
+  const policyPath = path.join(tmpDirForIssue27, "weighin-custom-b.toml");
+  fs.writeFileSync(policyPath, "unknown_key = true\n");
+  assert.throws(
+    () => loadConfig(policyPath),
+    (err) => {
+      assert.match(err.message, /weighin-custom-b\.toml/);
+      // Must not fall back to the default "weighin.toml"
+      assert.doesNotMatch(err.message, /^.*weighin\.toml.*$/);
+      return true;
+    },
+  );
+  fs.unlinkSync(policyPath);
+});
+
+// 3. Malformed TOML preserves useful parser and path diagnostics
+test("issue #27: loadConfig TOML parse error includes the config path", () => {
+  const policyPath = path.join(tmpDirForIssue27, "weighin-broken.toml");
+  fs.writeFileSync(policyPath, "[bad section\n");
+  assert.throws(
+    () => loadConfig(policyPath),
+    (err) => {
+      assert.match(err.message, /weighin-broken\.toml/);
+      // parser diagnostic should mention "parse" or "TOML"
+      assert.match(err.message, /Failed to parse TOML/i);
+      return true;
+    },
+  );
+  fs.unlinkSync(policyPath);
+});
+
+// 4. Direct validateConfig(value) still uses 'weighin.toml' as default
+test("issue #27: direct validateConfig(value) backward compat uses 'weighin.toml'", () => {
+  assert.throws(
+    () => validateConfig({ bad_key: true }),
+    (err) => {
+      assert.match(err.message, /weighin\.toml/);
+      assert.match(err.message, /bad_key/);
+      return true;
+    },
+  );
+});
+
+// 5. Missing optional policy file is report-only (returns null, no throw)
+test("issue #27: missing optional policy file is report-only (loadConfig returns null)", () => {
+  const missingPath = path.join(tmpDirForIssue27, "nonexistent-policy-27.toml");
+  // Ensure file really doesn't exist
+  try { fs.unlinkSync(missingPath); } catch { /* ignore */ }
+  assert.equal(loadConfig(missingPath), null);
+});
+
+// 6. Policy acceptance and runtime threshold behavior unchanged for valid configs
+test("issue #27: valid config loaded from custom path still enforces thresholds correctly", () => {
+  const policyPath = path.join(tmpDirForIssue27, "weighin-strict.toml");
+  fs.writeFileSync(
+    policyPath,
+    '[thresholds.functions.hello]\ncpu_instructions = "strict_zero_tolerance"\n',
+  );
+  const config = loadConfig(policyPath);
+  assert.ok(config !== null, "config should be non-null");
+  // No regression diff → no violations
+  assert.deepEqual(enforceThresholds(parityControl, config), []);
+  // Regression diff → violation
+  const headWithRegression = structuredClone(parityCaptured);
+  headWithRegression[0].benchmarks[0].metrics.cpu_instructions.consumed += 1;
+  const regressionDiff = diffBenchmarks(parityCaptured, headWithRegression);
+  const violations = enforceThresholds(regressionDiff, config);
+  assert.equal(violations.length, 1);
+  fs.unlinkSync(policyPath);
+});
+
+// loadConfigContent: schema error includes the source path
+test("issue #27: loadConfigContent schema error reports actual source path", () => {
+  assert.throws(
+    () => loadConfigContent("unknown_key = true", "refs/trusted/policy.toml"),
+    (err) => {
+      assert.match(err.message, /refs\/trusted\/policy\.toml/);
+      assert.match(err.message, /unknown_key/);
+      return true;
+    },
+  );
+});
+
+// loadConfigContent: second distinct source path
+test("issue #27: loadConfigContent schema error reports second distinct source path", () => {
+  assert.throws(
+    () =>
+      loadConfigContent("unknown_key = true", "org/repo@abc123/policy.toml"),
+    (err) => {
+      assert.match(err.message, /org\/repo@abc123\/policy\.toml/);
+      assert.doesNotMatch(err.message, /^.*weighin\.toml.*$/);
+      return true;
+    },
+  );
+});
+
 function action(
   mode,
   config = policy,

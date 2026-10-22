@@ -36267,10 +36267,9 @@ var WeighinConfigSchema = external_exports.object({
   }).strict().optional(),
   aggregates: external_exports.record(external_exports.string().min(1), AggregateBudgetConfigSchema).optional()
 }).strict();
-function validateConfig(value) {
+function validateConfig(value, fileName = "weighin.toml") {
   const parsed = WeighinConfigSchema.safeParse(value);
-  if (!parsed.success)
-    throw new Error(formatZodError(parsed.error, "weighin.toml"));
+  if (!parsed.success) throw new Error(formatZodError(parsed.error, fileName));
   return parsed.data;
 }
 var U64_MAX = 18446744073709551615n;
@@ -54883,7 +54882,7 @@ var TOML = __toESM(require_toml());
 var crypto4 = __toESM(require("crypto"));
 function loadConfigContent(content, sourcePath) {
   try {
-    return validateConfig(TOML.parse(content));
+    return validateConfig(TOML.parse(content), sourcePath);
   } catch (error2) {
     if (error2 instanceof Error && error2.message.startsWith("Invalid WeighIn configuration"))
       throw error2;

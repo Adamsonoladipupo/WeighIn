@@ -133,11 +133,18 @@ export type WeighinConfig = z.infer<typeof WeighinConfigSchema>;
  * Throws a descriptive error on any violation. This is the single source of
  * truth for policy validation used by both exported consumers and runtime
  * threshold enforcement.
+ *
+ * @param value - The raw value to validate.
+ * @param fileName - Optional filename shown in error diagnostics. Defaults to
+ *   `"weighin.toml"` so existing callers that pass no filename continue to
+ *   produce the same diagnostic messages.
  */
-export function validateConfig(value: unknown): WeighinConfig {
+export function validateConfig(
+  value: unknown,
+  fileName: string = "weighin.toml",
+): WeighinConfig {
   const parsed = WeighinConfigSchema.safeParse(value);
-  if (!parsed.success)
-    throw new Error(formatZodError(parsed.error, "weighin.toml"));
+  if (!parsed.success) throw new Error(formatZodError(parsed.error, fileName));
   return parsed.data;
 }
 

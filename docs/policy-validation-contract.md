@@ -96,13 +96,32 @@ internally, so TOML-parsed configs go through the same rules.
 
 ## Error messages
 
-Validation errors include the file name (`weighin.toml` when called through
-`validateConfig`) and a `- path: message` line for each issue. The file name is
-customisable via `formatZodError(error, fileName)` from `dist/config`.
+Validation errors include the actual policy filename and a `- path: message`
+line for each failing key.
 
-Example error for a malformed rule:
+- `validateConfig(value)` — defaults to `"weighin.toml"` for backward
+  compatibility with callers that do not supply a filename.
+- `validateConfig(value, fileName)` — uses the supplied filename in every
+  diagnostic line.
+- `loadConfig(configPath)` — passes `configPath` to `validateConfig` so schema
+  errors identify the actual file on disk. TOML parse errors are wrapped as
+  `Failed to parse TOML in <configPath>: <parser message>`.
+- `loadConfigContent(content, sourcePath)` — passes `sourcePath` to
+  `validateConfig` so schema errors identify the content's logical origin (e.g.
+  a trusted-policy ref path). TOML parse errors are similarly wrapped.
+
+The filename is also customisable directly via `formatZodError(error, fileName)`
+from `dist/config`.
+
+Example schema error from `loadConfig("configs/my-policy.toml")`:
 
 ```
-Invalid WeighIn configuration in weighin.toml:
+Invalid WeighIn configuration in configs/my-policy.toml:
 - thresholds.functions.hello.cpu_instructions: Invalid rule string. Must be 'ignore', 'strict_zero_tolerance', or 'allow_X_percent_increase' where X is a nonnegative decimal
+```
+
+Example TOML parse error from `loadConfig("configs/my-policy.toml")`:
+
+```
+Failed to parse TOML in configs/my-policy.toml: Expected "=" ...
 ```
