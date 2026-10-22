@@ -145,127 +145,82 @@ test('RPC charged-event disagreement fails even when return value and transactio
 });
 
 // ---------------------------------------------------------------------------
-// Invocation chaining: write-then-read state-loss demonstration
+// Invocation chaining: observable delete-then-read state-loss proof
 //
-// Each measureInvocation call operates against an immutable snapshot captured
-// from the live network.  Writes that the simulation _would_ commit are
-// reported as write_bytes / modified_entries / read_write_keys in the output,
-// but they are never persisted to the snapshot.  A subsequent independent
-// measureInvocation call fetches the same ledger state and therefore sees the
-// same null (absent) entry for the contractData key that the previous
-// simulation wrote.  This is the user-visible state-loss sequence described
-// in the "Fixture execution / Unsupported chaining" row of KNOWN_LIMITATIONS.
+// This is a replay of the raw capture archived by
+// tests/experiments/verify-metric-provenance.cjs. That experiment builds and
+// deploys a fresh contract whose constructor commits persistent `bench = 7`.
+// Setup is necessary: without a known committed value, a successful read could
+// not distinguish a discarded simulated delete from an initially absent key.
 //
-// Archive return values are preserved in the assertions below so a reviewer
-// can confirm the exact consumed resources without re-running the helper.
+// The first invocation is `bench(2, ...)`, which deletes `bench` in simulation.
+// The second, distinct invocation is `bench(0, ...)`, which asserts that
+// `bench` is still `Some(7)` before returning `[7]`. Both replay against the
+// same captured ledger state. Thus the successful second return is the
+// user-visible observation that the simulated delete was not committed.
 // ---------------------------------------------------------------------------
+const metricProvenance = require('../../docs/experiments/metric-provenance/rpc-captures.json');
+const archivedRead = metricProvenance[23];
+const archivedDelete = metricProvenance[35];
+const archivedDeleteEntries = metricProvenance[36];
+const archivedDeleteHeader = metricProvenance[37];
+const provenancePassphrase = 'Standalone Network ; February 2017';
+const deleteTransaction = () => TransactionBuilder.fromXDR(
+  archivedDelete.request.params.transaction, provenancePassphrase);
+const readTransaction = () => TransactionBuilder.fromXDR(
+  archivedRead.request.params.transaction, provenancePassphrase);
+const returnedSeven = 'AAAAEAAAAAEAAAABAAAAAwAAAAc=';
 
-// The HEAD fixture (snapshot.simulations[1]) writes 88 bytes to one persistent
-// contractData key that did not exist in the snapshot (xdr: null).
-const writeSimResult = snapshot.simulations[1].raw.result;
-const writeTransaction = () => TransactionBuilder.fromXDR(
-  snapshot.simulations[1].request.params.transaction, base.network_passphrase);
-
-// A capturedRpc variant that routes simulateTransaction to the write simulation.
-function capturedRpcWrite(t, mutate) {
-  let entryCalls = 0;
+function capturedDeleteThenRead(t, corruptRead = false) {
+  const deleteXdr = archivedDelete.request.params.transaction;
+  const readXdr = archivedRead.request.params.transaction;
+  const ledger = archivedDelete.raw.result.latestLedger;
   t.mock.method(globalThis, 'fetch', async (_url, options) => {
     const body = JSON.parse(options.body);
     let result;
-    if (body.method === 'getNetwork') result = { passphrase: base.network_passphrase, protocolVersion: 28 };
-    if (body.method === 'simulateTransaction') result = writeSimResult;
-    if (body.method === 'getLedgerEntries') {
-      entryCalls++;
-      // The RW contractData key that the write targets is absent from
-      // snapshot.entries (it never existed before this simulated write).
-      // Filtering by requested keys naturally returns no entry for it,
-      // which the adapter records as { key, xdr: null } — the absent /
-      // not-yet-written state that every independent simulation sees.
-      result = { ...snapshot.entries.raw.result, entries: snapshot.entries.raw.result.entries.filter(entry => body.params.keys.includes(entry.key)) };
+    if (body.method === 'getNetwork') result = { passphrase: provenancePassphrase, protocolVersion: 28 };
+    if (body.method === 'simulateTransaction') {
+      if (body.params.transaction === deleteXdr) result = archivedDelete.raw.result;
+      if (body.params.transaction === readXdr) {
+        // The archived read response was captured one ledger earlier, before
+        // the simulated delete. Only its ledger label is aligned to the
+        // delete snapshot; its return/data remain the recorded RPC values.
+        result = { ...archivedRead.raw.result, latestLedger: ledger };
+        if (corruptRead) result = { ...result, results: [{ xdr: xdr.ScVal.scvVoid().toXDR('base64') }] };
+      }
     }
-    if (body.method === 'getLedgers') result = snapshot.headers.raw.result;
-    if (mutate) result = mutate(body, result, entryCalls);
+    if (body.method === 'getLedgerEntries') result = {
+      ...archivedDeleteEntries.raw.result,
+      entries: archivedDeleteEntries.raw.result.entries.filter(entry => body.params.keys.includes(entry.key)),
+    };
+    if (body.method === 'getLedgers') result = archivedDeleteHeader.raw.result;
     assert.ok(result, body.method);
     return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
   });
-  return () => entryCalls;
 }
 
-test('write simulation reports write_bytes and modified_entries for a persistent contractData key', async t => {
-  // Archive: this invocation writes 88 bytes to one contractData key that was
-  // absent (xdr: null) in the captured snapshot.  The return value is the
-  // canonical void ScVal retval_xdr from the archive.
-  capturedRpcWrite(t);
-  const measured = await measureInvocation('http://captured/rpc', writeTransaction(), helper);
+test('simulated delete is discarded before a distinct read invocation', async t => {
+  capturedDeleteThenRead(t);
+  const deleted = await measureInvocation('http://captured/rpc', deleteTransaction(), helper);
+  const read = await measureInvocation('http://captured/rpc', readTransaction(), helper);
 
-  // The simulation reports the write footprint and byte count.
-  assert.equal(measured.output.write_bytes, 88,
-    'write simulation must report 88 bytes written to the persistent key');
-  assert.equal(measured.output.read_write_keys.length, 1,
-    'write simulation must include exactly one read-write footprint key');
-  assert.equal(measured.output.modified_entries, 1,
-    'write simulation must report exactly one modified ledger entry');
-
-  // CPU / provenance are intact — this is a well-formed measurement.
-  assert.ok(measured.output.cpu_instructions_consumed > 0,
-    'write simulation must report non-zero CPU consumption');
-  assert.equal(measured.provenance.ledger, 229,
-    'archived provenance ledger must equal 229');
+  // Archive the exact return values. `bench(2)` reports one modified entry;
+  // `bench(0)` returns [7] only after asserting persistent bench is Some(7).
+  assert.equal(deleted.output.retval_xdr, returnedSeven);
+  assert.equal(deleted.output.modified_entries, 1);
+  assert.equal(deleted.output.write_bytes, 0, 'deleting an entry changes no payload bytes');
+  assert.equal(read.output.retval_xdr, returnedSeven);
+  assert.equal(read.output.read_write_keys.length, 0, 'the second invocation is a read, not a replayed write');
+  assert.notEqual(read.provenance.snapshot_sha256, deleted.provenance.snapshot_sha256,
+    'the read additionally captures its absent-key lookup, while both use ledger 333');
+  assert.equal(read.provenance.ledger, 333);
 });
 
-test('second independent simulation sees same null entry — write-then-read state is lost', async t => {
-  // Run the write simulation first.
-  capturedRpcWrite(t);
-  const write = await measureInvocation('http://captured/rpc', writeTransaction(), helper);
-  assert.equal(write.output.write_bytes, 88, 'first call must confirm the write');
-  t.mock.restoreAll();
-
-  // Run a second independent simulation with identical captured state.
-  // capturedRpcWrite re-installs the same mock, returning the same snapshot
-  // entries — the RW key is still absent (xdr: null), exactly as it was
-  // before the first simulation ran.  The second call cannot observe the
-  // write from the first call because simulated writes are never committed
-  // to the snapshot; each invocation is isolated.
-  capturedRpcWrite(t);
-  const read = await measureInvocation('http://captured/rpc', writeTransaction(), helper);
-
-  // The second call produces the same output as the first: it still sees the
-  // absent entry and still simulates the same write (88 bytes), confirming
-  // there is no accumulated or shared state between invocations.
-  assert.equal(read.output.write_bytes, 88,
-    'second simulation must see the same pre-write snapshot state and reproduce the same write cost');
-  assert.equal(read.output.read_write_keys.length, 1,
-    'second simulation must have the same read-write footprint as the first');
-  assert.deepEqual(read.output.read_write_keys, write.output.read_write_keys,
-    'both simulations operate against the same absent entry — state was not persisted between calls');
-
-  // Snapshot_sha256 must be identical across both calls: the captured entries
-  // did not change between invocations, which is the observable proof that the
-  // first simulation's write was discarded.
-  assert.equal(read.provenance.snapshot_sha256, write.provenance.snapshot_sha256,
-    'snapshot digest must be identical — simulated writes do not alter the captured ledger state');
-});
-
-test('write-then-read chaining with invalid RPC response fails closed and does not leak prior write state', async t => {
-  // Verify that a malformed second simulation response fails explicitly
-  // rather than silently returning stale or zero-valued metrics, ensuring
-  // the unsupported-chaining boundary is fail-closed.
-  capturedRpcWrite(t);
-  const write = await measureInvocation('http://captured/rpc', writeTransaction(), helper);
-  assert.equal(write.output.write_bytes, 88);
-  t.mock.restoreAll();
-
-  // Second call: corrupt the simulateTransaction result so the return value
-  // disagrees with the native helper.  This must reject rather than blend
-  // values from the (discarded) first-call write.
-  capturedRpcWrite(t, (body, result) =>
-    body.method === 'simulateTransaction'
-      ? { ...result, results: [{ xdr: xdr.ScVal.scvVoid().toXDR('base64') }] }
-      : result
-  );
+test('delete-then-read capture fails closed if the read return is invalid', async t => {
+  capturedDeleteThenRead(t, true);
+  await measureInvocation('http://captured/rpc', deleteTransaction(), helper);
   await assert.rejects(
-    measureInvocation('http://captured/rpc', writeTransaction(), helper),
+    measureInvocation('http://captured/rpc', readTransaction(), helper),
     /disagrees with RPC/,
-    'parity check must reject a tampered second simulation, not silently use prior write output'
   );
 });
