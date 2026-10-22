@@ -117,6 +117,8 @@ For PR comments, add the [separate comment workflow](.github/workflows/weighin-c
 to the default branch. It reads report artifacts without executing PR code with
 a write token. The supplied consumer posts only after a successful PR producer;
 failed policy reports remain in artifacts and job summaries.
+The comment sub-Action runs its bundled entry point from the Action installation;
+report and metadata paths are read from the caller's working directory.
 
 ### PR comment metadata contract
 
@@ -163,10 +165,12 @@ All supported inputs are declared in [action.yml](action.yml):
 | `base-ref` | Baseline branch, tag, or commit SHA; PR base branch, otherwise `main`, if omitted. Invalid refs are rejected before builds or deployment. |
 | `rust-toolchain` | Contract-build Rustup override; does not change pinned native-helper toolchain |
 | `build-command` | Custom shell build command in each revision; replaces default build guarantees |
+| `allow-cross-target-substitution` | Opt in to using a WASM artifact built for a different target when the declared target artifact is missing; disabled by default |
 | `skip-build` | `true` uses prebuilt fixture WASMs in both revisions; incompatible with `build-command`. Accepts YAML 1.2 boolean spellings (`true`, `True`, `TRUE`, `false`, `False`, `FALSE`); defaults to `false`. Non-boolean values are rejected |
 | `report-path` | Optional Markdown report destination; replaced atomically, so an interrupted write keeps the previously published report |
 | `metadata-path` | Optional versioned PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
 | `github-token` | Optional direct PR-comment token; omit for the separate comment workflow |
+| `comment-author-mode` | Which identity owns the report comment: `github-actions` (default, canonical GitHub Actions bot ID 41898282) or `authenticated-user` (resolves the authenticated user via `GET /user`). Unsupported values fail the action before any comment mutation. Custom installation-token writers and arbitrary third-party GitHub App identities are not supported by either mode. |
 
 Outputs: `result` is `pass` or `fail`; `diff-json` contains the comparison.
 An unsuccessful comparison emits `fail` and `{}`. A valid comparison with policy
@@ -246,11 +250,21 @@ revisions, enforce thresholds or post comments. Provision the native helper/RPC,
 then run `node dist/cli.js <fixtures.json> --rpc-url <standalone-rpc> --output <results.json>`
 from a built checkout. See [native provisioning](docs/native-measurement.md).
 
+<<<<<<< HEAD
 SDK metadata is reported per contract from the Cargo workspace/lock owning each
 fixture WASM (`contract/Cargo.lock` or a root workspace `Cargo.lock`), or
 `"unknown"` when no owning lock can be established; multiple declared versions
 are listed rather than collapsed to one. It is best-effort on-disk metadata and
 does not prove how a prebuilt WASM was compiled.
+
+## Source Accounts
+
+The account that invokes a measured call is recorded in
+`provenance.source_account`, and `measureSourceAccountEffects` from
+`weighin/dist/source-account` measures one case under several source accounts
+while code, arguments, protocol, calibration and resource limits stay fixed.
+It reports the per-metric effect and whether results stay comparable across
+accounts. See [source-account effects](docs/source-account-effects.md).
 
 ## Evidence
 
@@ -260,6 +274,9 @@ Evidence conclusions are bounded by the recorded environment.
 [Hosted Soroban Forge validation](docs/hosted-soroban-forge.md) additionally proves
 one real escrow query: changed WASM/address pairing, +14,234 CPU and verified
 strict-policy failure in a permitted isolated fork.
+[Cross-contract nested invocation attribution](docs/nested-invocation.md) proves a
+real caller→callee host call charging one combined footprint with per-contract
+event and return attribution.
 
 ## Known Limitations
 

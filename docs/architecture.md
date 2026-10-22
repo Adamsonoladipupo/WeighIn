@@ -126,6 +126,14 @@ ledger, input/header/snapshot/full-config hashes, compute calibration and resour
 limit hashes. Different invocation snapshots may use different ledgers. This
 records environment differences; it does not freeze state across the suite.
 
+The provenance also records the invoking source account. `src/measurement.ts`
+accepts an optional `invocationSourceAccount` for a single measured run, and
+`src/source-account.ts::measureSourceAccountEffects` measures one case under
+several source accounts while code, arguments, protocol, calibration and
+resource limits stay fixed. It refuses to report an effect when any held-fixed
+value differs and states whether the results stay comparable across accounts.
+See [source-account effects](source-account-effects.md).
+
 ## Diff and policy
 
 `src/record-schema.ts` provides the authoritative versioned schema and standalone
@@ -184,11 +192,13 @@ valid comparison emit `fail` and `{}`; they never reuse a diff from another run.
 There is no successful no-baseline fallback. Optional direct-comment failure is
 warning-only.
 
-The separate `comment/` Action runs `bundled/comment-action.js`, reads and
-validates downloaded report/PR metadata, and creates or updates the comment
-carrying `<!-- weighin-report -->`. It fails on missing artifacts, invalid
-metadata or API failure. The example consumer runs only after successful PR
-producers, on trusted default-branch workflow code; it does not execute
-downloaded PR code. Failed policy reports remain in producer artifacts and
-summaries. Hosted expected-negative proof jobs separately assert genuine Action
-exit 1, then finish green once verified.
+The separate `comment/` Action runs `bundled/comment-action.js` resolved from
+the Action installation, independently of the caller's current working
+directory. Report and metadata paths are resolved from the caller's working
+directory. It reads and validates downloaded report/PR metadata, then creates or
+updates the comment carrying `<!-- weighin-report -->`. It fails on missing
+artifacts, invalid metadata or API failure. The example consumer runs only after
+successful PR producers, on trusted default-branch workflow code; it does not
+execute downloaded PR code. Failed policy reports remain in producer artifacts
+and summaries. Hosted expected-negative proof jobs separately assert genuine
+Action exit 1, then finish green once verified.

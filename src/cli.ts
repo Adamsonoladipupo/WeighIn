@@ -20,6 +20,7 @@ export interface CliOptions {
   outputPath: string | null;
   rpcUrl: string;
   jsonStdout: boolean;
+  allowCrossTargetSubstitution: boolean;
 }
 
 export function parseArgs(
@@ -29,6 +30,7 @@ export function parseArgs(
   let explicitOutputFile: string | null = null;
   let jsonStdout = false;
   let rpcUrl = "http://localhost:8000/rpc";
+  let allowCrossTargetSubstitution = false;
 
   for (let i = 0; i < rawArgs.length; i++) {
     const arg = rawArgs[i];
@@ -43,6 +45,8 @@ export function parseArgs(
       }
     } else if (arg === "--stdout" || arg === "--json-stdout") {
       jsonStdout = true;
+    } else if (arg === "--allow-cross-target-substitution") {
+      allowCrossTargetSubstitution = true;
     } else if (!arg.startsWith("--")) {
       // Positional argument
       if (fixturesPath === null) {
@@ -75,6 +79,7 @@ export function parseArgs(
       : explicitOutputFile || "weighin-results.json",
     rpcUrl,
     jsonStdout,
+    allowCrossTargetSubstitution,
   };
 }
 
@@ -145,6 +150,7 @@ async function main() {
       fixturesPath,
       gitCommit,
       rpcUrl,
+      allowCrossTargetSubstitution: options.allowCrossTargetSubstitution,
     });
 
     if (jsonStdout) {
