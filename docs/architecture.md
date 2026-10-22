@@ -16,11 +16,13 @@ policy means report-only. `loadConfig` validates known configuration keys/types;
 Fixtures are parsed by `src/identity.ts::parseFixtures`, not the older generic
 fixture schema exported from `src/config.ts`.
 
-HEAD is built and measured first. BASE defaults to the PR base branch, otherwise
-`main`, or the supplied `base-ref`. The Action fetches that ref from `origin` with
-depth 1, then creates a detached worktree at `FETCH_HEAD`. This is not a merge-base
-calculation. BASE reads its own fixture file at the same relative path and builds
-and measures its own declarations. HEAD policy governs the resulting diff unless
+The Action validates `base-ref` as a branch, tag, or commit SHA before network
+checks, builds, or deployment. Empty, whitespace-padded, option-like and invalid
+Git ref values fail with an input diagnostic. HEAD is built and measured first.
+BASE defaults to the PR base branch, otherwise `main`, or the supplied `base-ref`.
+The Action fetches that ref from `origin` with depth 1, then creates a detached
+worktree at `FETCH_HEAD`. This is not a merge-base calculation. BASE reads its own
+fixture file at the same relative path and builds and measures its own declarations. HEAD policy governs the resulting diff unless
 the caller opts into `trusted-policy-ref`/`trusted-policy-path`. In that mode
 the action reads the exact resolved commit from `origin`, validates it before
 measurement, and reports its revision and content hash; HEAD cannot replace it.
@@ -124,6 +126,14 @@ ledger, input/header/snapshot/full-config hashes, compute calibration and resour
 limit hashes. Different invocation snapshots may use different ledgers. This
 records environment differences; it does not freeze state across the suite.
 
+The provenance also records the invoking source account. `src/measurement.ts`
+accepts an optional `invocationSourceAccount` for a single measured run, and
+`src/source-account.ts::measureSourceAccountEffects` measures one case under
+several source accounts while code, arguments, protocol, calibration and
+resource limits stay fixed. It refuses to report an effect when any held-fixed
+value differs and states whether the results stay comparable across accounts.
+See [source-account effects](source-account-effects.md).
+
 ## Diff and policy
 
 `src/record-schema.ts` provides the authoritative versioned schema and standalone
@@ -157,6 +167,16 @@ metric sources/caps, both revisions' provenance, deltas, additions/removals and
 violations. `src/report.ts` writes optional Markdown and PR metadata; metadata
 is written only for PR events. The same report goes to `GITHUB_STEP_SUMMARY`.
 
+The Markdown report is delivered atomically. `src/report.ts` writes the complete
+body to a temporary file it creates exclusively (`O_CREAT | O_EXCL`) in the
+destination directory, closes that handle and renames the temporary file over
+the destination. The destination is therefore replaced only after a complete
+write, so a failed or interrupted delivery keeps a previously published report
+and never publishes a partial one. Cleanup removes only the temporary file the
+failing run created; a concurrent writer's temporary file is never touched. A
+cleanup failure is reported as a warning and never masks the original write or
+rename error.
+
 The PR metadata artifact is versioned (`src/pr-metadata.ts`). The producer writes
 `schemaVersion`, the base `repository`, `prNumber` and `headSha`; a fork PR still
 records the base repository. The consumer validates the version, repository
@@ -166,9 +186,11 @@ unversioned metadata is explicitly rejected rather than inferred, so producer an
 consumer versions must be paired.
 
 The Action emits `result` and `diff-json` before failing a valid policy violation.
-Comparison/build/measurement/configuration errors emit `fail` and `{}`, an error
-summary, and unsuccessful execution. There is no successful no-baseline fallback.
-Optional direct-comment failure is warning-only.
+It retains a validated diff if a later report-file or job-summary write fails,
+while preserving the delivery error as the failure diagnostic. Failures before a
+valid comparison emit `fail` and `{}`; they never reuse a diff from another run.
+There is no successful no-baseline fallback. Optional direct-comment failure is
+warning-only.
 
 The separate `comment/` Action runs `bundled/comment-action.js`, reads and
 validates downloaded report/PR metadata, and creates or updates the comment

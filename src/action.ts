@@ -12,6 +12,7 @@ import {
   loadConfigContent,
   policyContentSha256,
   enforceThresholds,
+  resolveEffectivePolicy,
   Violation,
   PolicyOrigin,
 } from "./threshold";
@@ -25,10 +26,24 @@ import {
   redactEndpointSecrets,
   sanitizeEndpoint,
 } from "./endpoint";
+import {
+  SUPPORTED_NETWORK_PASSPHRASE,
+  SUPPORTED_PROTOCOL_VERSION,
+} from "./network";
+import {
+  isWorkspaceClean,
+  getModifiedFiles,
+  getHeadSha,
+  capture,
+  captureRaw,
+} from "./git-utils";
 
 // The configured endpoint is tracked only so the terminal failure path can
 // redact any credential it may contain before reporting.
 let configuredRpcUrl = "";
+let validatedDiffJson: string | null = null;
+
+class RpcCompatibilityError extends Error {}
 
 // ---------------------------------------------------------------------------
 // RPC health check
@@ -73,21 +88,62 @@ async function assertRpcHealthy(rpcUrl: string): Promise<void> {
         `RPC getNetwork method error: ${JSON.stringify(metadata.error)}`,
       );
     }
-    const networkResult = metadata.result as { passphrase?: unknown } | null;
+    const networkResult = metadata.result as {
+      passphrase?: unknown;
+      protocolVersion?: unknown;
+    } | null;
     if (
       typeof networkResult?.passphrase !== "string" ||
-      !networkResult.passphrase.trim()
+      !networkResult.passphrase.trim() ||
+      !Number.isInteger(networkResult.protocolVersion)
     ) {
-      throw new Error("Invalid RPC network metadata");
+      throw new RpcCompatibilityError(
+        "RPC is healthy but incompatible: invalid network metadata (a passphrase and integer protocolVersion are required)",
+      );
     }
+    if (networkResult.passphrase !== SUPPORTED_NETWORK_PASSPHRASE)
+      throw new RpcCompatibilityError(
+        `RPC is healthy but incompatible: unsupported network passphrase (expected "${SUPPORTED_NETWORK_PASSPHRASE}")`,
+      );
+    if (networkResult.protocolVersion !== SUPPORTED_PROTOCOL_VERSION)
+      throw new RpcCompatibilityError(
+        `RPC is healthy but incompatible: unsupported protocol ${networkResult.protocolVersion} (only protocol ${SUPPORTED_PROTOCOL_VERSION} is supported)`,
+      );
     core.info(`RPC healthy — network: ${networkResult.passphrase}`);
   } catch (err: any) {
-    core.setFailed(
-      `Soroban RPC at ${sanitizeEndpoint(rpcUrl)} is not reachable: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}\n` +
-        `Start the network before invoking this action (e.g. via stellar/quickstart ` +
-        `or scripts/start-local-network.sh), then pass its URL as the rpc-url input.`,
-    );
+    const diagnostic =
+      err instanceof RpcCompatibilityError
+        ? err.message
+        : `Soroban RPC at ${sanitizeEndpoint(rpcUrl)} is not reachable: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}\n` +
+          `Start the network before invoking this action (e.g. via stellar/quickstart ` +
+          `or scripts/start-local-network.sh), then pass its URL as the rpc-url input.`;
+    core.setFailed(diagnostic);
     throw err; // halt execution
+  }
+}
+
+async function validateBaseRef(repoRoot: string, ref: string): Promise<void> {
+  if (!ref.trim() || ref !== ref.trim() || ref.startsWith("-")) {
+    throw new Error(
+      "Invalid base-ref: provide a non-empty branch, tag, or commit SHA without surrounding whitespace or option prefixes",
+    );
+  }
+  if (/^[0-9a-fA-F]{7,40}$/.test(ref)) return;
+
+  const branchRef = await exec.exec(
+    "git",
+    ["check-ref-format", `refs/heads/${ref}`],
+    { cwd: repoRoot, ignoreReturnCode: true, silent: true },
+  );
+  const tagRef = await exec.exec(
+    "git",
+    ["check-ref-format", `refs/tags/${ref}`],
+    { cwd: repoRoot, ignoreReturnCode: true, silent: true },
+  );
+  if (branchRef !== 0 && tagRef !== 0) {
+    throw new Error(
+      `Invalid base-ref "${ref}": expected a valid branch, tag, or commit SHA`,
+    );
   }
 }
 
@@ -153,43 +209,6 @@ function resolveRevisionFixturesPath(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Run a command and capture stdout. Throws on non-zero exit. */
-async function capture(
-  cmd: string,
-  args: string[],
-  cwd?: string,
-): Promise<string> {
-  let out = "";
-  await exec.exec(cmd, args, {
-    cwd,
-    listeners: {
-      stdout: (d: Buffer) => {
-        out += d.toString();
-      },
-    },
-    silent: true,
-  });
-  return out.trim();
-}
-
-async function captureRaw(
-  cmd: string,
-  args: string[],
-  cwd?: string,
-): Promise<string> {
-  let out = "";
-  await exec.exec(cmd, args, {
-    cwd,
-    silent: true,
-    listeners: {
-      stdout: (d: Buffer) => {
-        out += d.toString();
-      },
-    },
-  });
-  return out;
-}
-
 async function loadPolicy(
   repoDir: string,
   configPathRel: string,
@@ -240,15 +259,6 @@ async function loadPolicy(
       content_sha256: policyContentSha256(content),
     },
   };
-}
-
-/** Get HEAD SHA in the given directory. */
-async function getHeadSha(dir: string): Promise<string> {
-  try {
-    return await capture("git", ["rev-parse", "HEAD"], dir);
-  } catch {
-    return "unknown";
-  }
 }
 
 /** Read soroban-sdk version from Cargo.lock (best-effort). */
@@ -368,6 +378,7 @@ async function upsertPrComment(token: string, body: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function run(): Promise<void> {
+  validatedDiffJson = null;
   let keyDir: string | null = null;
   let sharedKeyFile: string | null = null;
 
@@ -379,7 +390,7 @@ async function run(): Promise<void> {
     const rpcUrl = core.getInput("rpc-url") || "http://localhost:8000/rpc";
     configuredRpcUrl = rpcUrl;
     const githubToken = core.getInput("github-token");
-    const baseRefInput = core.getInput("base-ref");
+    const baseRefInput = core.getInput("base-ref", { trimWhitespace: false });
     const rustToolchain = core.getInput("rust-toolchain");
     const reportPathInput = core.getInput("report-path");
     const metadataPathInput = core.getInput("metadata-path");
@@ -397,8 +408,16 @@ async function run(): Promise<void> {
     // The runner's checkout of the PR head is at GITHUB_WORKSPACE
     const headWorkspace = process.env["GITHUB_WORKSPACE"] ?? process.cwd();
 
+    if (baseRefInput.length > 0 && baseRefInput !== baseRefInput.trim()) {
+      throw new Error(
+        "Invalid base-ref: empty or surrounding whitespace is not allowed",
+      );
+    }
     const baseRef =
-      baseRefInput || github.context.payload.pull_request?.base?.ref || "main";
+      baseRefInput.trim() ||
+      github.context.payload.pull_request?.base?.ref ||
+      "main";
+    await validateBaseRef(headWorkspace, baseRef);
 
     keyDir = fs.mkdtempSync(path.join(os.tmpdir(), "weighin-key-"));
     fs.chmodSync(keyDir, 0o700);
@@ -438,6 +457,15 @@ async function run(): Promise<void> {
     core.startGroup("Building + measuring HEAD");
     const headSha = await getHeadSha(headWorkspace);
     core.info(`HEAD SHA: ${headSha}`);
+
+    // Check for uncommitted changes to ensure benchmarks reflect the reported HEAD
+    const isClean = await isWorkspaceClean(headWorkspace);
+    if (!isClean) {
+      const modifiedFiles = await getModifiedFiles(headWorkspace);
+      throw new Error(
+        `HEAD workspace has uncommitted changes. Benchmark measurements must reflect the reported git HEAD revision. Modified files:\n${modifiedFiles.map((f) => `  - ${f}`).join("\n")}\n\nCommit or stash changes before running benchmarks.`,
+      );
+    }
 
     let headResults: ContractBenchmark[];
     try {
@@ -551,26 +579,32 @@ async function run(): Promise<void> {
       core.info("No weighin.toml found — no thresholds enforced");
     }
     const violations: Violation[] = enforceThresholds(diff, config);
+    validatedDiffJson = JSON.stringify(diff);
     core.info(`Violations: ${violations.length}`);
     for (const v of violations) {
-      core.error(
-        `[${contractLabel(v)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
-      );
+      if (v.aggregate_id) {
+        core.error(`[aggregate: ${v.aggregate_id}] ${v.message}`);
+      } else {
+        core.error(
+          `[${contractLabel(v as any)} / ${v.function_name} / ${v.case_id}] ${v.message}`,
+        );
+      }
     }
     core.endGroup();
 
     // 8. Outputs
     const result = violations.length > 0 ? "fail" : "pass";
     core.setOutput("result", result);
-    core.setOutput("diff-json", JSON.stringify(diff));
+    core.setOutput("diff-json", validatedDiffJson);
 
     // Report is available in the job summary even without permission to post a PR comment.
+    const effectivePolicy = resolveEffectivePolicy(diff, config, policy.origin);
     const body = renderComment(
       diff,
       violations,
       baseRef,
       headSha,
-      policy.origin,
+      effectivePolicy,
     );
     if (process.env.GITHUB_STEP_SUMMARY)
       await core.summary.addRaw(body).write();
@@ -625,7 +659,7 @@ run().catch(async (error: Error) => {
     configuredRpcUrl,
   );
   core.setOutput("result", "fail");
-  core.setOutput("diff-json", "{}");
+  core.setOutput("diff-json", validatedDiffJson ?? "{}");
   core.setFailed(message);
 
   const reportPathInput = core.getInput("report-path");
