@@ -13,7 +13,7 @@ const {
   rpc,
   xdr,
 } = require("@stellar/stellar-sdk");
-const { runMeasurement } = require("../dist/measurement");
+const { isContractDeployed, runMeasurement } = require("../dist/measurement");
 const base = require("./fixtures/stage1b/base-simulation.json");
 const head = require("./fixtures/stage1b/head-simulation.json");
 const control = require("./fixtures/stage1b/control-simulation.json");
@@ -113,6 +113,38 @@ function calculateContractId(deployerAddress, salt) {
   return StrKey.encodeContract(contractIdBytes);
 }
 
+test("deployment probe accepts the SDK-parsed ledger entry XDR objects", async () => {
+  const keypair = Keypair.random();
+  const contractId = calculateContractId(
+    keypair.publicKey(),
+    crypto.createHash("sha256").update("sdk-ledger-entry-test").digest(),
+  );
+  const contractAddress = Address.fromString(contractId).toScAddress();
+  const ledgerKey = xdr.LedgerKey.contractData(
+    new xdr.LedgerKeyContractData({
+      contract: contractAddress,
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+    }),
+  );
+  const entry = xdr.LedgerEntryData.contractData(
+    new xdr.ContractDataEntry({
+      ext: new xdr.ExtensionPoint(0),
+      contract: contractAddress,
+      key: xdr.ScVal.scvLedgerKeyContractInstance(),
+      durability: xdr.ContractDataDurability.persistent(),
+      val: xdr.ScVal.scvBool(true),
+    }),
+  );
+  const server = {
+    getLedgerEntries: async () => ({
+      entries: [{ key: ledgerKey, val: entry }],
+    }),
+  };
+
+  assert.equal(await isContractDeployed(server, contractId), true);
+});
+
 // Replay captured responses through the public measurement entry point.
 // RPC transport is isolated here; these tests do not claim a live measurement.
 async function replay(t, response) {
@@ -183,13 +215,52 @@ async function replay(t, response) {
   });
   const accountValue = xdr.LedgerEntryData.fromXDR(accountRow.xdr, "base64");
   accountValue.account().accountId(keypair.xdrPublicKey());
-  t.mock.method(globalThis, 'fetch', async (url, options) => new Response(JSON.stringify({ jsonrpc: '2.0', id: JSON.parse(options.body).id, result: {
-    latestLedger: 100, entries: [{ key: JSON.parse(options.body).params.keys[0], xdr: accountValue.toXDR('base64') }],
-  } })));
-  t.mock.method(rpc.Server.prototype, 'getAccount', async () => new Account(keypair.publicKey(), '1'));
-  t.mock.method(rpc.Server.prototype, 'getLedgerEntries', async () => ({ entries: [{}] }));
-  t.mock.method(rpc.Server.prototype, 'simulateTransaction', async () => response);
-  return runMeasurement({ fixturesPath: path.join(dir, 'fixtures.json'), fixtureId: 'fixtures.json', keyFile: path.join(dir, 'key'), gitCommit: 'test-replay', sdkVersion: '25.3.1', helperPath: path.join(dir, 'missing-helper') });
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (url, options) =>
+      new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: JSON.parse(options.body).id,
+          result: {
+            latestLedger: 100,
+            entries: [
+              {
+                key: JSON.parse(options.body).params.keys[0],
+                xdr: accountValue.toXDR("base64"),
+              },
+            ],
+          },
+        }),
+      ),
+  );
+  t.mock.method(
+    rpc.Server.prototype,
+    "getAccount",
+    async () => new Account(keypair.publicKey(), "1"),
+  );
+  t.mock.method(rpc.Server.prototype, "getLedgerEntries", async () => ({
+    entries: [
+      {
+        key: ledgerKey.toXDR("base64"),
+        xdr: existingEntry.toXDR("base64"),
+      },
+    ],
+  }));
+  t.mock.method(
+    rpc.Server.prototype,
+    "simulateTransaction",
+    async () => response,
+  );
+  return runMeasurement({
+    fixturesPath: path.join(dir, "fixtures.json"),
+    fixtureId: "fixtures.json",
+    keyFile: path.join(dir, "key"),
+    gitCommit: "test-replay",
+    sdkVersion: "25.3.1",
+    helperPath: path.join(dir, "missing-helper"),
+  });
 }
 
 for (const [revision, capture] of [
@@ -299,19 +370,19 @@ test("deployment probe failures do not masquerade as an absent contract", async 
   ).toXDR("base64");
   const accountValue = xdr.LedgerEntryData.fromXDR(accountRow.xdr, "base64");
   accountValue.account().accountId(keypair.xdrPublicKey());
-  t.mock.method(
-    globalThis,
-    "fetch",
-    async () =>
-      new Response(
-        JSON.stringify({
-          result: {
-            latestLedger: 100,
-            entries: [{ key: readyKey, xdr: accountValue.toXDR("base64") }],
-          },
-        }),
-      ),
-  );
+  t.mock.method(globalThis, "fetch", async (_url, options) => {
+    const request = JSON.parse(options.body);
+    return new Response(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: {
+          latestLedger: 100,
+          entries: [{ key: readyKey, xdr: accountValue.toXDR("base64") }],
+        },
+      }),
+    );
+  });
   t.mock.method(
     rpc.Server.prototype,
     "getAccount",
