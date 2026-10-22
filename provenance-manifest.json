@@ -108,7 +108,7 @@
       "sha256": "6c5e5d0b199519e5c90e8a9fda56fff2b329e33618c2bb507c1410decd80a7ba"
     },
     {
-      "path": "src/record-schema.ts",
+      "path": "src\\record-schema.ts",
       "sha256": "dcc5f0e4bc22f02aeb69df0c728b182808dc34ebf1ae068020f271b48466aa73"
     },
     {
@@ -120,7 +120,7 @@
       "sha256": "a59df6d50991c7aaecc902e488f880d5ac6483cd38c35ad2320871ae58b3a983"
     },
     {
-      "path": "src/source-account.ts",
+      "path": "src\\source-account.ts",
       "sha256": "ec7c43238e07e030fb8c470d03670c89dce56f7935543e419d0150013ba7ee5b"
     },
     {

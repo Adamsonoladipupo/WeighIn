@@ -107,6 +107,11 @@ inputs:
     required: false
     default: "false"
 
+  allow-cross-target-substitution:
+    description: "Explicitly allow falling back to wasm32-unknown-unknown if a declared wasm32v1-none artifact is missing. Defaults to false. When false (default), missing declared artifacts fail immediately."
+    required: false
+    default: "false"
+
 outputs:
   result:
     description: >

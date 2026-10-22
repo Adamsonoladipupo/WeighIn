@@ -53534,6 +53534,61 @@ function sameXdr(left, right) {
   const bytes = (value) => typeof value === "string" ? Buffer.from(value) : Buffer.isBuffer(value) ? value : value.toXDR("raw");
   return bytes(left).equals(bytes(right));
 }
+function validateFootprintKeys(readOnlyKeys, readWriteKeys, sourceLabel = "footprint") {
+  const seenReadOnly = /* @__PURE__ */ new Set();
+  const duplicateReadOnly = /* @__PURE__ */ new Set();
+  for (const key of readOnlyKeys) {
+    if (seenReadOnly.has(key)) {
+      duplicateReadOnly.add(key);
+    }
+    seenReadOnly.add(key);
+  }
+  if (duplicateReadOnly.size > 0) {
+    throw new Error(
+      `Invalid ${sourceLabel}: duplicate key(s) in read-only footprint: [${[...duplicateReadOnly].join(", ")}]`
+    );
+  }
+  const seenReadWrite = /* @__PURE__ */ new Set();
+  const duplicateReadWrite = /* @__PURE__ */ new Set();
+  for (const key of readWriteKeys) {
+    if (seenReadWrite.has(key)) {
+      duplicateReadWrite.add(key);
+    }
+    seenReadWrite.add(key);
+  }
+  if (duplicateReadWrite.size > 0) {
+    throw new Error(
+      `Invalid ${sourceLabel}: duplicate key(s) in read-write footprint: [${[...duplicateReadWrite].join(", ")}]`
+    );
+  }
+  const overlaps = [];
+  for (const key of seenReadWrite) {
+    if (seenReadOnly.has(key)) {
+      overlaps.push(key);
+    }
+  }
+  if (overlaps.length > 0) {
+    throw new Error(
+      `Invalid ${sourceLabel}: key(s) present in both read-only and read-write footprints: [${overlaps.join(", ")}]`
+    );
+  }
+}
+function validateLedgerHeaderHash(historyEntry, rowHash) {
+  const headerBytes = historyEntry.header().toXDR();
+  const recomputedHash = crypto2.createHash("sha256").update(headerBytes).digest("hex");
+  const historyHash = historyEntry.hash().toString("hex");
+  if (historyHash !== recomputedHash) {
+    throw new Error(
+      `Ledger header hash mismatch: history-entry hash (${historyHash}) does not match SHA-256 of decoded header bytes (${recomputedHash})`
+    );
+  }
+  if (rowHash && rowHash.toLowerCase() !== recomputedHash.toLowerCase()) {
+    throw new Error(
+      `Ledger header hash mismatch: RPC response hash (${rowHash}) does not match SHA-256 of decoded header bytes (${recomputedHash})`
+    );
+  }
+  return { recomputedHash, historyHash };
+}
 function validateLedgerKeyEntryCorrespondence(keyXdr, dataXdr) {
   const key = types.LedgerKey.fromXDR(keyXdr, "base64");
   const data = types.LedgerEntryData.fromXDR(dataXdr, "base64");
@@ -53762,6 +53817,11 @@ async function simulateSnapshot(input, helperPath, signal) {
       "Invalid simulation helper output: resource fields disagree with transaction-data XDR"
     );
   }
+  validateFootprintKeys(
+    output.read_only_keys,
+    output.read_write_keys,
+    "simulation helper footprint"
+  );
   types.ScVal.fromXDR(output.retval_xdr, "base64");
   for (const event of output.contract_events_xdr) {
     if (types.ContractEvent.fromXDR(event, "base64").type().name === "diagnostic") {
@@ -53970,11 +54030,10 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
       simulation.transactionData,
       "base64"
     ).resources();
-    for (const key of [
-      ...resources.footprint().readOnly(),
-      ...resources.footprint().readWrite()
-    ])
-      keys.add(key.toXDR("base64"));
+    const roKeys = resources.footprint().readOnly().map((k) => k.toXDR("base64"));
+    const rwKeys = resources.footprint().readWrite().map((k) => k.toXDR("base64"));
+    validateFootprintKeys(roKeys, rwKeys, "RPC simulation footprint");
+    for (const key of [...roKeys, ...rwKeys]) keys.add(key);
     const requested = [...keys].sort();
     const rows = /* @__PURE__ */ new Map();
     let drift = false;
@@ -54046,7 +54105,13 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
     }
     if (drift) continue;
     const headers = external_exports.object({
-      ledgers: external_exports.array(external_exports.object({ sequence: integer, headerXdr: encoded }))
+      ledgers: external_exports.array(
+        external_exports.object({
+          sequence: integer,
+          headerXdr: encoded,
+          hash: external_exports.string().optional()
+        })
+      )
     }).parse(
       await callRpc(
         rpcUrl,
@@ -54083,6 +54148,7 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
     if (header.ledgerSeq() !== simulation.latestLedger || header.ledgerVersion() !== network.protocolVersion) {
       throw new Error("Snapshot header ledger/protocol mismatch");
     }
+    validateLedgerHeaderHash(historyEntry, row.hash);
     const missingConfigs = configNames.filter((name) => {
       const key = configNameToKey.get(name);
       const row2 = rows.get(key);
@@ -54279,6 +54345,11 @@ async function measureInvocation(rpcUrl, transaction, helperPath, options) {
 // src/measurement.ts
 var DEFAULT_RPC_URL = "http://localhost:8000/rpc";
 function metricsFromSimulation(output, limits) {
+  validateFootprintKeys(
+    output.read_only_keys,
+    output.read_write_keys,
+    "measured simulation footprint"
+  );
   const measured = (consumed, limit, source, limit_source) => ({
     availability: "measured",
     consumed,
@@ -54655,26 +54726,6 @@ async function isContractDeployed(server, contractId) {
     );
   }
 }
-function resolveContractWasmPath(fixturesDir, wasmPath) {
-  let resolved = path3.resolve(fixturesDir, wasmPath);
-  if (!fs2.existsSync(resolved)) {
-    let altPath = "";
-    if (resolved.includes("wasm32-unknown-unknown")) {
-      altPath = resolved.replace("wasm32-unknown-unknown", "wasm32v1-none");
-    } else if (resolved.includes("wasm32v1-none")) {
-      altPath = resolved.replace("wasm32v1-none", "wasm32-unknown-unknown");
-    }
-    if (altPath && fs2.existsSync(altPath)) {
-      resolved = altPath;
-    } else {
-      throw new Error(
-        `WASM not found: ${resolved}
-Build the contract before running measurements.`
-      );
-    }
-  }
-  return resolved;
-}
 async function ensureContractDeployed(options) {
   const { server, deployer, deployerAddress, wasmBytes, wasmHash, salt } = options;
   const deployed = await isContractDeployed(server, options.contractId);
@@ -54753,6 +54804,93 @@ async function buildInvocationTransaction(options) {
     })
   ).setTimeout(30).build();
 }
+var WASM_MAGIC = Buffer.from([
+  0,
+  97,
+  115,
+  109,
+  1,
+  0,
+  0,
+  0
+]);
+function resolveWasmPath(fixturesDir, declaredWasmPath, options) {
+  const wasmPath = path3.resolve(fixturesDir, declaredWasmPath);
+  if (fs2.existsSync(wasmPath)) {
+    return wasmPath;
+  }
+  const allowOptIn = options?.allowCrossTargetSubstitution ?? (process.env.WEIGHIN_ALLOW_CROSS_TARGET_SUBSTITUTION === "true" || process.env.WEIGHIN_ALLOW_CROSS_TARGET_SUBSTITUTION === "1");
+  if (allowOptIn) {
+    let altPath = "";
+    if (wasmPath.includes("wasm32-unknown-unknown")) {
+      altPath = wasmPath.replace("wasm32-unknown-unknown", "wasm32v1-none");
+    } else if (wasmPath.includes("wasm32v1-none")) {
+      altPath = wasmPath.replace("wasm32v1-none", "wasm32-unknown-unknown");
+    }
+    if (altPath && fs2.existsSync(altPath)) {
+      console.warn(
+        `Warning: declared WASM artifact not found at ${wasmPath}; substituting alternate target artifact at ${altPath}`
+      );
+      return altPath;
+    }
+  }
+  throw new Error(
+    `WASM not found: ${wasmPath}
+Build the contract before running measurements.`
+  );
+}
+function validateWasmArtifact(fixturesDir, declaredWasmPath, options) {
+  const resolvedPath = resolveWasmPath(fixturesDir, declaredWasmPath, options);
+  let stat;
+  try {
+    stat = fs2.statSync(resolvedPath);
+  } catch (err) {
+    throw new Error(
+      `WASM artifact inaccessible at ${resolvedPath}: ${err.message}`
+    );
+  }
+  if (!stat.isFile()) {
+    throw new Error(`WASM artifact at ${resolvedPath} is not a regular file`);
+  }
+  const fd = fs2.openSync(resolvedPath, "r");
+  try {
+    const buffer = Buffer.alloc(8);
+    const bytesRead = fs2.readSync(fd, buffer, 0, 8, 0);
+    if (bytesRead < 8 || !buffer.equals(WASM_MAGIC)) {
+      throw new Error(
+        `Invalid WASM header at ${resolvedPath}: expected magic header \\0asm\\x01\\x00\\x00\\x00`
+      );
+    }
+  } finally {
+    fs2.closeSync(fd);
+  }
+  return { resolvedPath };
+}
+function preflightContractArtifacts(fixturesDir, contracts, fixtureId, options) {
+  const resolvedPaths = /* @__PURE__ */ new Map();
+  const errors = [];
+  for (const contract of contracts) {
+    const contractLabel2 = contract.logical_id ?? (contract.id ? `id:${contract.id}` : `wasm:${contract.wasm_path}`);
+    const context3 = `${fixtureId} / ${contractLabel2}`;
+    try {
+      const { resolvedPath } = validateWasmArtifact(
+        fixturesDir,
+        contract.wasm_path,
+        options
+      );
+      resolvedPaths.set(contract.wasm_path, resolvedPath);
+    } catch (err) {
+      errors.push(`[${context3}] ${err.message}`);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `Preflight validation failed for configured contract WASM artifacts:
+${errors.join("\n")}`
+    );
+  }
+  return resolvedPaths;
+}
 async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcUrl) {
   let opts;
   if (typeof fixturesPathOrOptions === "string") {
@@ -54776,6 +54914,12 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
     rawFixtures,
     opts.fixtureId ?? path3.relative(process.cwd(), path3.resolve(opts.fixturesPath))
   );
+  const resolvedWasmPaths = preflightContractArtifacts(
+    fixturesDir,
+    fixturesSpec.contracts,
+    fixturesSpec.fixture_id,
+    { allowCrossTargetSubstitution: opts.allowCrossTargetSubstitution }
+  );
   const server = new rpc_exports.Server(effectiveRpcUrl, { allowHttp: true });
   const deployer = await getOrInitAccount(
     keyFile,
@@ -54794,10 +54938,7 @@ async function runMeasurement(fixturesPathOrOptions, gitCommit, sdkVersion, rpcU
   }
   const results = [];
   for (const contractSpec of fixturesSpec.contracts) {
-    const wasmPath = resolveContractWasmPath(
-      fixturesDir,
-      contractSpec.wasm_path
-    );
+    const wasmPath = resolvedWasmPaths.get(contractSpec.wasm_path);
     const wasmBytes = fs2.readFileSync(wasmPath);
     const wasmHash = crypto3.createHash("sha256").update(wasmBytes).digest();
     const wasmSha256 = wasmHash.toString("hex");
@@ -56404,6 +56545,10 @@ async function run() {
     const metadataPathInput = core3.getInput("metadata-path");
     const buildCommand = core3.getInput("build-command");
     const skipBuild = parseOptionalBooleanInput("skip-build", false);
+    const allowCrossTargetSubstitution = parseOptionalBooleanInput(
+      "allow-cross-target-substitution",
+      false
+    );
     if (buildCommand && skipBuild) {
       throw new Error("build-command and skip-build cannot be used together");
     }
@@ -56467,7 +56612,8 @@ Commit or stash changes before running benchmarks.`
         gitCommit: headSha,
         sdkVersion: getSdkVersion(headWorkspace),
         rpcUrl,
-        keyFile: sharedKeyFile
+        keyFile: sharedKeyFile,
+        allowCrossTargetSubstitution
       });
     } catch (err) {
       throw new Error(`HEAD measurement failed: ${err.message}`);
@@ -56510,7 +56656,8 @@ Commit or stash changes before running benchmarks.`
           gitCommit: baseSha,
           sdkVersion: getSdkVersion(baseDir),
           rpcUrl,
-          keyFile: sharedKeyFile
+          keyFile: sharedKeyFile,
+          allowCrossTargetSubstitution
         });
         for (const contract of baseResults) {
           for (const bench of contract.benchmarks) {
