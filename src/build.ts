@@ -14,11 +14,110 @@ export interface BuiltContract {
   rust_version: string;
 }
 
+export interface ContractInputSnapshot {
+  packageDir: string;
+  hashes: Map<string, string>;
+}
+
+/**
+ * Snapshot selected manifests, lockfiles, and tracked contract source inputs
+ * before the build begins.
+ */
+export function snapshotContractInputs(
+  packageDir: string,
+): ContractInputSnapshot {
+  const hashes = new Map<string, string>();
+
+  function scanDir(dir: string) {
+    if (!fs.existsSync(dir)) return;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (
+        entry.name === "target" ||
+        entry.name === "node_modules" ||
+        entry.name === ".git"
+      ) {
+        continue;
+      }
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath);
+      } else if (entry.isFile()) {
+        if (
+          entry.name === "Cargo.toml" ||
+          entry.name === "Cargo.lock" ||
+          entry.name.endsWith(".rs")
+        ) {
+          try {
+            const hash = createHash("sha256")
+              .update(fs.readFileSync(fullPath))
+              .digest("hex");
+            hashes.set(fullPath, hash);
+          } catch {
+            // Ignore unreadable
+          }
+        }
+      }
+    }
+  }
+
+  scanDir(packageDir);
+
+  // Traverse upward to capture workspace root Cargo.toml and Cargo.lock if present
+  let current = path.dirname(packageDir);
+  while (current && current !== packageDir) {
+    const parentToml = path.join(current, "Cargo.toml");
+    const parentLock = path.join(current, "Cargo.lock");
+    if (fs.existsSync(parentToml)) {
+      hashes.set(
+        parentToml,
+        createHash("sha256").update(fs.readFileSync(parentToml)).digest("hex"),
+      );
+    }
+    if (fs.existsSync(parentLock)) {
+      hashes.set(
+        parentLock,
+        createHash("sha256").update(fs.readFileSync(parentLock)).digest("hex"),
+      );
+    }
+    if (fs.existsSync(path.join(current, ".git"))) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  return { packageDir, hashes };
+}
+
+/**
+ * Assert that manifests, lockfiles, and tracked contract inputs were not mutated
+ * during the default contract build.
+ */
+export function assertContractInputsNotMutated(
+  snapshot: ContractInputSnapshot,
+): void {
+  for (const [filePath, expectedHash] of snapshot.hashes.entries()) {
+    if (!fs.existsSync(filePath)) {
+      throw new Error(
+        `Default contract build mutated tracked inputs: input file was deleted during build: ${filePath}`,
+      );
+    }
+    const currentHash = createHash("sha256")
+      .update(fs.readFileSync(filePath))
+      .digest("hex");
+    if (currentHash !== expectedHash) {
+      throw new Error(
+        `Default contract build mutated tracked inputs: ${path.basename(filePath)} was modified during build at ${filePath}`,
+      );
+    }
+  }
+}
+
 interface CargoPackage {
   id: string;
   name: string;
   manifest_path: string;
-  targets: Array<{ crate_types: string[] }>;
+  targets: Array<{ name?: string; crate_types: string[] }>;
 }
 
 /** Detect storage errors that the optimizer's temporary-file writer may hide. */
@@ -119,7 +218,11 @@ export async function buildContracts(
     );
   }
 
-  const plans: Array<{ destination: string; pkg: CargoPackage }> = [];
+  const plans: Array<{
+    destination: string;
+    pkg: CargoPackage;
+    targetName: string;
+  }> = [];
   const metadataCache = new Map<string, CargoPackage[]>();
   for (const contract of fixtures.contracts) {
     const destination = path.resolve(fixturesDir, contract.wasm_path);
@@ -157,20 +260,40 @@ export async function buildContracts(
       );
       metadataCache.set(manifest, packages);
     }
-    const matches = packages.filter(
-      (pkg) =>
-        `${pkg.name.replace(/-/g, "_")}.wasm` === path.basename(destination),
-    );
+    const destinationName = path.basename(destination);
+    const matches: Array<{ pkg: CargoPackage; targetName: string }> = [];
+    for (const pkg of packages) {
+      const cdylibTargets = pkg.targets.filter((target) =>
+        target.crate_types.includes("cdylib"),
+      );
+      const targetNames = cdylibTargets.map(
+        (target) => target.name ?? pkg.name,
+      );
+      if (
+        !targetNames.some(
+          (name) => `${name.replace(/-/g, "_")}.wasm` === destinationName,
+        )
+      ) {
+        continue;
+      }
+      if (cdylibTargets.length > 1) {
+        throw new Error(
+          `Cargo package ${pkg.name} has ambiguous multiple cdylib targets; found ${cdylibTargets.length}`,
+        );
+      }
+      matches.push({ pkg, targetName: targetNames[0] });
+    }
     if (matches.length !== 1)
       throw new Error(
         `wasm_path ${contract.wasm_path} must identify exactly one Cargo cdylib package; found ${matches.length}`,
       );
-    plans.push({ destination, pkg: matches[0] });
+    const { pkg, targetName } = matches[0];
+    plans.push({ destination, pkg, targetName });
   }
 
   const artifacts = new Map<string, Buffer>();
   const results: BuiltContract[] = [];
-  for (const { destination, pkg } of plans) {
+  for (const { destination, pkg, targetName } of plans) {
     let wasm = artifacts.get(pkg.manifest_path);
     if (!wasm) {
       let outputDir: string;
@@ -183,6 +306,9 @@ export async function buildContracts(
       }
       try {
         verifyBuildStorage(outputDir);
+        const inputSnapshot = snapshotContractInputs(
+          path.dirname(pkg.manifest_path),
+        );
         await command(
           "stellar",
           [
@@ -200,8 +326,9 @@ export async function buildContracts(
           path.dirname(pkg.manifest_path),
           { ...env, TMPDIR: outputDir, TMP: outputDir, TEMP: outputDir },
         );
+        assertContractInputsNotMutated(inputSnapshot);
         wasm = fs.readFileSync(
-          path.join(outputDir, `${pkg.name.replace(/-/g, "_")}.wasm`),
+          path.join(outputDir, `${targetName.replace(/-/g, "_")}.wasm`),
         );
         verifyBuildStorage(outputDir, Math.max(1024 * 1024, wasm.length));
         if (

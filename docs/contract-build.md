@@ -19,10 +19,14 @@ back to plain Cargo or the older target.
 
 For each declared `wasm_path`, WeighIn locates the nearest owning Cargo manifest
 and reads locked Cargo workspace metadata. The WASM basename must identify
-exactly one workspace `cdylib` package (`my-contract` emits `my_contract.wasm`).
-Unknown/ambiguous package names, missing manifests and build failures are errors.
-All declarations are resolved before builds start; unrelated workspace packages
-are not selected. Multiple declarations of one package share one build.
+exactly one workspace `cdylib` target using its Cargo target name (falling back
+to the package name when Cargo omits the target name). A package named
+`my-package` with `[lib] name = "contract-library"` emits
+`contract_library.wasm`. Packages with multiple `cdylib` targets are rejected
+before compilation because the target output is ambiguous. Unknown/ambiguous
+names, missing manifests and build failures are errors. All declarations are
+resolved before builds start; unrelated workspace packages are not selected.
+Multiple declarations of one package share one build.
 
 Each package builds into a fresh temporary output directory:
 
@@ -62,8 +66,11 @@ repository workflows include the verified Stellar CLI installation and target.
 The default path uses the Stellar CLI. An explicitly supplied `build-command`
 remains an escape hatch for projects with a different build process; WeighIn runs
 it in each revision's own worktree. `skip-build: true` uses the fixture paths as
-prebuilt artifacts. These overrides bypass the default builder's CLI/version,
-optimization and fresh-output checks, so their caller owns those guarantees.
+prebuilt artifacts. The `skip-build` input parses standard YAML 1.2 boolean spellings
+(`true`, `True`, `TRUE`, `false`, `False`, `FALSE`) and defaults to `false` when omitted;
+non-boolean values are rejected before starting Action work. These overrides bypass
+the default builder's CLI/version, optimization and fresh-output checks, so their caller
+owns those guarantees.
 
 ## Reference commands
 
