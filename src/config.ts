@@ -45,12 +45,34 @@ export const FunctionThresholdsSchema = z.record(
   RuleValueSchema,
 );
 
+export const BenchmarkSelectorSchema = z
+  .object({
+    fixture_id: z.string().min(1).optional(),
+    logical_id: z.string().min(1).optional(),
+    function_name: z.string().min(1),
+    case_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const AggregateBudgetConfigSchema = z
+  .object({
+    description: z.string().optional(),
+    members: z.array(BenchmarkSelectorSchema).min(1),
+    limits: z.record(z.enum(METRIC_KEYS), z.number().nonnegative()).optional(),
+    thresholds: z.record(z.enum(METRIC_KEYS), RuleValueSchema).optional(),
+  })
+  .strict();
+
+export type BenchmarkSelector = z.infer<typeof BenchmarkSelectorSchema>;
+export type AggregateBudgetConfig = z.infer<typeof AggregateBudgetConfigSchema>;
+
 export const WeighinConfigSchema = z
   .object({
     thresholds: z
       .object({
         global: GlobalThresholdsSchema.optional(),
         functions: z.record(z.string(), FunctionThresholdsSchema).optional(),
+        aggregates: z.record(z.string(), FunctionThresholdsSchema).optional(),
       })
       .strict()
       .optional(),
@@ -58,9 +80,11 @@ export const WeighinConfigSchema = z
       .object({
         global: GlobalLimitsSchema.optional(),
         functions: z.record(z.string(), FunctionLimitsSchema).optional(),
+        aggregates: z.record(z.string(), FunctionLimitsSchema).optional(),
       })
       .strict()
       .optional(),
+    aggregates: z.record(z.string(), AggregateBudgetConfigSchema).optional(),
   })
   .strict();
 
@@ -212,23 +236,30 @@ export const InvocationArgSchema: z.ZodType<any> = z.lazy(() =>
     }),
 );
 
+const idSchema = z
+  .string()
+  .refine((value) => value.trim().length > 0, "ID must not be blank");
+
 export const InvocationSpecSchema = z
   .object({
-    function_name: z.string(),
+    id: idSchema.optional(),
+    function_name: z.string().min(1),
     args: z.array(InvocationArgSchema),
   })
   .strict();
 
 export const ContractSpecSchema = z
   .object({
-    wasm_path: z.string(),
-    invocations: z.array(InvocationSpecSchema),
+    id: idSchema.optional(),
+    wasm_path: z.string().min(1),
+    invocations: z.array(InvocationSpecSchema).min(1),
   })
   .strict();
 
 export const FixturesSpecSchema = z
   .object({
-    contracts: z.array(ContractSpecSchema),
+    id: idSchema.optional(),
+    contracts: z.array(ContractSpecSchema).min(1),
   })
   .strict();
 

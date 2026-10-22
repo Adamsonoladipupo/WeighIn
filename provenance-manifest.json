@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "purpose": "verifiable WeighIn package build provenance",
+  "source_revision": "d76c11e51995707c670834d790bdc32ba8f16ffd",
+  "tools": {
+    "node": "v25.6.1",
+    "npm": "11.9.0"
+  },
+  "inputs": [
+    {
+      "path": "action.yml",
+      "sha256": "ca7d20495d8a4d02bbfa7953df9e6dc6fca09040a96aa80dd79896365b9e9f59"
+    },
+    {
+      "path": "bundled/comment-action.js",
+      "sha256": "fa76a82b443f072be6401fe6ed12d3387de0e25f180a78a1b8557a850c976e04"
+    },
+    {
+      "path": "bundled/index.js",
+      "sha256": "26447f5239fd55e7d50744ea03546f76c0f809a39ec540be081b40ec55bec08e"
+    },
+    {
+      "path": "native/simulation/Cargo.lock",
+      "sha256": "4e8dbe9f2964a53fdf7aebc5f8de27f81a427e165c9e81a7d6565d22f821d22f"
+    },
+    {
+      "path": "native/simulation/Cargo.toml",
+      "sha256": "5668215acc89d889f89bf37d918b81a3493fd2642df8dcc0b5ecbbdf77fb759b"
+    },
+    {
+      "path": "native/simulation/src/main.rs",
+      "sha256": "c46eaa54dc07ea5aed5ab42481328e630d7b8f595e5198f7c58b468f9949507e"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "932fef16ee0e0dba8cd024113db4c9a0e06be38c6b2105124c91601c859ec801"
+    },
+    {
+      "path": "package.json",
+      "sha256": "a3f33d61c09503cbfadec7dd83ebb881bc99a11b8914700d91fa3a22c7b15093"
+    },
+    {
+      "path": "src/account.ts",
+      "sha256": "f0f93eae5ae0062fb70e1d66240938b2aff658cb198900537f8c3231a51ee2cc"
+    },
+    {
+      "path": "src/action.ts",
+      "sha256": "64fe5084dcc00ea09d7b37b9001f6696eaffa8ff175cd8f489782b7cac3e74a8"
+    },
+    {
+      "path": "src/audit-policy.ts",
+      "sha256": "d5ec2836a5af96b115997beea594b8d2050d55e40843b027eda1aeb560f173d4"
+    },
+    {
+      "path": "src/build-selection.ts",
+      "sha256": "927d8ebbae359017b0cbe4b5cbdeb763d576005b84e4c47160814c4569a39a78"
+    },
+    {
+      "path": "src/build.ts",
+      "sha256": "05a7e3bfac53726615414ab171e90c1231084908e8b467ac5b50eda5faca9504"
+    },
+    {
+      "path": "src/cli.ts",
+      "sha256": "2abfb702efcd7341fe580b3b37d2b3445af85d6ac78307a0f15dcd58a865fcce"
+    },
+    {
+      "path": "src/comment-action.ts",
+      "sha256": "bdf47a27661cae97c47deeef7cdd5042ad15fa6546f8122bd288af46889c36aa"
+    },
+    {
+      "path": "src/comment.ts",
+      "sha256": "84404c770f2314842c6a67f399e5ea54845cfe70a7c4c15ef1c182df27612e9c"
+    },
+    {
+      "path": "src/config.ts",
+      "sha256": "d823fc7cdc5c9e15ea3565fe38e21e8ceeeea807d74d3c12464aeed05174767b"
+    },
+    {
+      "path": "src/dependency-inventory.ts",
+      "sha256": "4c2cd8c1ba1ae63aa22e43cd93aa81c83b38e7ae8b93a12486a6e35698b8a405"
+    },
+    {
+      "path": "src/diff.ts",
+      "sha256": "e266a6660e1e09b25b283c0adde2401f771fbdd2216a4f50a819310ced09143e"
+    },
+    {
+      "path": "src/endpoint.ts",
+      "sha256": "65f94722112a2cd6a643fc66fd5d26801349adbce3f355abc36fdfbd6dee7d46"
+    },
+    {
+      "path": "src/git-utils.ts",
+      "sha256": "8ab417117aeae423812950bec1be424deeb5f9195f11e561fe33021113462027"
+    },
+    {
+      "path": "src/identity.ts",
+      "sha256": "e0127204807e1bca07896eaee3396c54295ef8a09188debba09edc0ed7e1c086"
+    },
+    {
+      "path": "src/measurement.ts",
+      "sha256": "5e80a03f9a94f3535d3e5575354171fb5653fd39e20cd671c5b92c40441f08f1"
+    },
+    {
+      "path": "src/network.ts",
+      "sha256": "a79ec668430348b6c694b40dfe9a0dcc1b5de5495d3934b80c76bc814ee8e44f"
+    },
+    {
+      "path": "src/pr-metadata.ts",
+      "sha256": "6c5e5d0b199519e5c90e8a9fda56fff2b329e33618c2bb507c1410decd80a7ba"
+    },
+    {
+      "path": "src/record-schema.ts",
+      "sha256": "dcc5f0e4bc22f02aeb69df0c728b182808dc34ebf1ae068020f271b48466aa73"
+    },
+    {
+      "path": "src/report.ts",
+      "sha256": "531612923e05a8d96b61037d98f3efc179735bfe8a526bcd88dcda1f6b9547c2"
+    },
+    {
+      "path": "src/simulation.ts",
+      "sha256": "f25168e2b70e7920e220adf98c9e2cacb2f4e27771ab98ea481644b329139f85"
+    },
+    {
+      "path": "src/source-account.ts",
+      "sha256": "ec7c43238e07e030fb8c470d03670c89dce56f7935543e419d0150013ba7ee5b"
+    },
+    {
+      "path": "src/threshold.ts",
+      "sha256": "815882d56065516b950b4917de7b6f27a9a37554e9ae9689f64729f1b0ceb511"
+    }
+  ]
+}

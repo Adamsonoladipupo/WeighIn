@@ -26099,28 +26099,143 @@ var init_github = __esm({
 
 // src/comment-action.ts
 var core = __toESM(require_core());
+init_github();
 var fs = __toESM(require("fs"));
+
+// src/pr-metadata.ts
+var PR_METADATA_SCHEMA_VERSION = 1;
+var SHA_PATTERN = /^[0-9a-f]{40}$/i;
+function parsePrMetadata(raw, expectedRepository) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("PR metadata is not valid JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("PR metadata must be a JSON object");
+  }
+  const metadata = parsed;
+  if (!Object.prototype.hasOwnProperty.call(metadata, "schemaVersion")) {
+    throw new Error(
+      "Legacy unversioned PR metadata is not supported; schemaVersion is required"
+    );
+  }
+  if (metadata.schemaVersion !== PR_METADATA_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported PR metadata schemaVersion: ${JSON.stringify(metadata.schemaVersion)}`
+    );
+  }
+  if (typeof metadata.repository !== "string" || metadata.repository.trim() === "") {
+    throw new Error("PR metadata repository is missing");
+  }
+  if (metadata.repository.toLowerCase() !== expectedRepository.trim().toLowerCase()) {
+    throw new Error(
+      `PR metadata repository ${metadata.repository} does not match trusted repository ${expectedRepository}`
+    );
+  }
+  if (typeof metadata.prNumber !== "number" || !Number.isSafeInteger(metadata.prNumber) || metadata.prNumber <= 0) {
+    throw new Error("PR metadata prNumber must be a positive integer");
+  }
+  if (typeof metadata.headSha !== "string" || !SHA_PATTERN.test(metadata.headSha)) {
+    throw new Error(
+      "PR metadata headSha must be a 40-character hexadecimal SHA"
+    );
+  }
+  return {
+    schemaVersion: metadata.schemaVersion,
+    repository: metadata.repository,
+    prNumber: metadata.prNumber,
+    headSha: metadata.headSha
+  };
+}
+
+// src/record-schema.ts
+var METRIC_KEYS = [
+  "cpu_instructions",
+  "memory_bytes",
+  "ledger_read_entries",
+  "ledger_read_bytes",
+  "ledger_write_entries",
+  "ledger_write_bytes",
+  "historical_data_read_bytes",
+  "contract_data_hard_limit",
+  "tx_size_bytes",
+  "events_count",
+  "event_data_bytes"
+];
+var METRIC_KEY_SET = new Set(METRIC_KEYS);
 
 // src/comment.ts
 var COMMENT_MARKER = "<!-- weighin-report -->";
-async function upsertPrComment(token, numberOrBody, explicitBody) {
+var GITHUB_ACTIONS_BOT = {
+  login: "github-actions[bot]",
+  id: 41898282,
+  type: "Bot"
+};
+async function resolveExpectedAuthor(octokit, mode) {
+  if (mode === "github-actions") {
+    return { id: GITHUB_ACTIONS_BOT.id };
+  }
+  if (mode === "authenticated-user") {
+    let data;
+    try {
+      const response = await octokit.rest.users.getAuthenticated();
+      data = response.data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? "unknown error");
+      throw new Error(
+        `comment-author-mode is "authenticated-user" but the authenticated user could not be resolved: ${message}`
+      );
+    }
+    const user = data;
+    if (!user || typeof user.id !== "number" || !Number.isInteger(user.id) || user.id <= 0) {
+      throw new Error(
+        'comment-author-mode is "authenticated-user" but GET /user returned an unusable identity (missing or non-positive numeric id). Ensure the supplied token belongs to a regular user or bot account with a valid numeric ID.'
+      );
+    }
+    return { id: user.id };
+  }
+  throw new Error(
+    `Unsupported comment-author-mode: "${mode}". Supported values are "github-actions" and "authenticated-user".`
+  );
+}
+async function upsertPrComment(token, numberOrBody, bodyOrOptions, maybeOptions) {
   const github = await Promise.resolve().then(() => (init_github(), github_exports));
-  const core2 = await Promise.resolve().then(() => __toESM(require_core()));
-  const body = typeof numberOrBody === "string" ? numberOrBody : explicitBody;
-  const prNumber = typeof numberOrBody === "number" ? numberOrBody : github.context.payload.pull_request?.number;
+  let body;
+  let prNumberInput;
+  let options;
+  if (typeof numberOrBody === "number") {
+    prNumberInput = numberOrBody;
+    body = bodyOrOptions;
+    options = maybeOptions ?? {};
+  } else {
+    body = numberOrBody;
+    prNumberInput = void 0;
+    options = bodyOrOptions ?? {};
+  }
+  const core2 = options.core ?? await Promise.resolve().then(() => __toESM(require_core()));
+  const mode = options.commentAuthorMode ?? "github-actions";
+  if (mode !== "github-actions" && mode !== "authenticated-user") {
+    throw new Error(
+      `Unsupported comment-author-mode: "${mode}". Supported values are "github-actions" and "authenticated-user".`
+    );
+  }
+  const prNumber = prNumberInput !== void 0 ? prNumberInput : github.context.payload.pull_request?.number;
   if (!prNumber) {
     core2.warning("Not in a pull_request context; skipping PR comment.");
     return;
   }
   const octokit = github.getOctokit(token);
   const { owner, repo } = github.context.repo;
+  const expectedAuthor = await resolveExpectedAuthor(octokit, mode);
   const { data: comments } = await octokit.rest.issues.listComments({
     owner,
     repo,
     issue_number: prNumber
   });
   const existing = comments.find(
-    (comment) => comment.body?.includes(COMMENT_MARKER)
+    (comment) => comment.body?.includes(COMMENT_MARKER) && comment.user?.id === expectedAuthor.id
   );
   if (existing) {
     await octokit.rest.issues.updateComment({
@@ -26147,6 +26262,13 @@ async function run() {
     const reportPath = core.getInput("report-path", { required: true });
     const metadataPath = core.getInput("metadata-path", { required: true });
     const token = core.getInput("github-token", { required: true });
+    const commentAuthorModeRaw = core.getInput("comment-author-mode") || "github-actions";
+    if (commentAuthorModeRaw !== "github-actions" && commentAuthorModeRaw !== "authenticated-user") {
+      throw new Error(
+        `Unsupported comment-author-mode: "${commentAuthorModeRaw}". Supported values are "github-actions" and "authenticated-user".`
+      );
+    }
+    const commentAuthorMode = commentAuthorModeRaw;
     if (!fs.existsSync(reportPath)) {
       throw new Error(`Report file not found: ${reportPath}`);
     }
@@ -26155,11 +26277,12 @@ async function run() {
     }
     const reportBody = fs.readFileSync(reportPath, "utf8");
     const metadataRaw = fs.readFileSync(metadataPath, "utf8");
-    const metadata = JSON.parse(metadataRaw);
-    if (!metadata.prNumber) {
-      throw new Error("prNumber not found in metadata file");
-    }
-    await upsertPrComment(token, metadata.prNumber, reportBody);
+    const { owner, repo } = context2.repo;
+    const metadata = parsePrMetadata(metadataRaw, `${owner}/${repo}`);
+    await upsertPrComment(token, metadata.prNumber, reportBody, {
+      commentAuthorMode,
+      core
+    });
   } catch (error) {
     core.setFailed(error.message);
   }
