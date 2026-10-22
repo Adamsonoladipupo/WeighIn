@@ -167,6 +167,7 @@ All supported inputs are declared in [action.yml](action.yml):
 | `report-path` | Optional Markdown report destination; replaced atomically, so an interrupted write keeps the previously published report |
 | `metadata-path` | Optional versioned PR-number/HEAD-SHA JSON destination; emitted only in a PR context |
 | `github-token` | Optional direct PR-comment token; omit for the separate comment workflow |
+| `comment-author-mode` | Which identity owns the report comment: `github-actions` (default, canonical GitHub Actions bot ID 41898282) or `authenticated-user` (resolves the authenticated user via `GET /user`). Unsupported values fail the action before any comment mutation. Custom installation-token writers and arbitrary third-party GitHub App identities are not supported by either mode. |
 
 Outputs: `result` is `pass` or `fail`; `diff-json` contains the comparison.
 An unsuccessful comparison emits `fail` and `{}`. A valid comparison with policy

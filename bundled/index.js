@@ -26079,6 +26079,11 @@ var init_utils2 = __esm({
 });
 
 // node_modules/@actions/github/lib/github.js
+var github_exports = {};
+__export(github_exports, {
+  context: () => context2,
+  getOctokit: () => getOctokit
+});
 function getOctokit(token, options, ...additionalPlugins) {
   const GitHubWithPlugins = GitHub.plugin(...additionalPlugins);
   return new GitHubWithPlugins(getOctokitOptions(token, options));
@@ -55292,6 +55297,93 @@ function resolveEffectivePolicy(diff, config2, origin) {
 
 // src/comment.ts
 var COMMENT_MARKER = "<!-- weighin-report -->";
+var GITHUB_ACTIONS_BOT = {
+  login: "github-actions[bot]",
+  id: 41898282,
+  type: "Bot"
+};
+async function resolveExpectedAuthor(octokit, mode) {
+  if (mode === "github-actions") {
+    return { id: GITHUB_ACTIONS_BOT.id };
+  }
+  if (mode === "authenticated-user") {
+    let data;
+    try {
+      const response = await octokit.rest.users.getAuthenticated();
+      data = response.data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err ?? "unknown error");
+      throw new Error(
+        `comment-author-mode is "authenticated-user" but the authenticated user could not be resolved: ${message}`
+      );
+    }
+    const user = data;
+    if (!user || typeof user.id !== "number" || !Number.isInteger(user.id) || user.id <= 0) {
+      throw new Error(
+        'comment-author-mode is "authenticated-user" but GET /user returned an unusable identity (missing or non-positive numeric id). Ensure the supplied token belongs to a regular user or bot account with a valid numeric ID.'
+      );
+    }
+    return { id: user.id };
+  }
+  throw new Error(
+    `Unsupported comment-author-mode: "${mode}". Supported values are "github-actions" and "authenticated-user".`
+  );
+}
+async function upsertPrComment(token, numberOrBody, bodyOrOptions, maybeOptions) {
+  const github = await Promise.resolve().then(() => (init_github(), github_exports));
+  let body;
+  let prNumberInput;
+  let options;
+  if (typeof numberOrBody === "number") {
+    prNumberInput = numberOrBody;
+    body = bodyOrOptions;
+    options = maybeOptions ?? {};
+  } else {
+    body = numberOrBody;
+    prNumberInput = void 0;
+    options = bodyOrOptions ?? {};
+  }
+  const core4 = options.core ?? await Promise.resolve().then(() => __toESM(require_core()));
+  const mode = options.commentAuthorMode ?? "github-actions";
+  if (mode !== "github-actions" && mode !== "authenticated-user") {
+    throw new Error(
+      `Unsupported comment-author-mode: "${mode}". Supported values are "github-actions" and "authenticated-user".`
+    );
+  }
+  const prNumber = prNumberInput !== void 0 ? prNumberInput : github.context.payload.pull_request?.number;
+  if (!prNumber) {
+    core4.warning("Not in a pull_request context; skipping PR comment.");
+    return;
+  }
+  const octokit = github.getOctokit(token);
+  const { owner, repo } = github.context.repo;
+  const expectedAuthor = await resolveExpectedAuthor(octokit, mode);
+  const { data: comments } = await octokit.rest.issues.listComments({
+    owner,
+    repo,
+    issue_number: prNumber
+  });
+  const existing = comments.find(
+    (comment) => comment.body?.includes(COMMENT_MARKER) && comment.user?.id === expectedAuthor.id
+  );
+  if (existing) {
+    await octokit.rest.issues.updateComment({
+      owner,
+      repo,
+      comment_id: existing.id,
+      body
+    });
+    core4.info(`Updated PR comment #${existing.id}`);
+  } else {
+    await octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: prNumber,
+      body
+    });
+    core4.info("Created new PR comment");
+  }
+}
 var METRIC_LABELS = {
   cpu_instructions: "CPU Instructions",
   memory_bytes: "Memory Bytes",
@@ -56287,41 +56379,6 @@ async function removeWorktree(repoRoot, dir) {
     core3.warning(`Could not remove git worktree at ${dir}`);
   }
 }
-var COMMENT_MARKER2 = "<!-- weighin-report -->";
-async function upsertPrComment(token, body) {
-  const octokit = getOctokit(token);
-  const { owner, repo } = context2.repo;
-  const prNumber = context2.payload.pull_request?.number;
-  if (!prNumber) {
-    core3.warning("Not in a pull_request context; skipping PR comment.");
-    return;
-  }
-  const { data: comments } = await octokit.rest.issues.listComments({
-    owner,
-    repo,
-    issue_number: prNumber
-  });
-  const existing = comments.find(
-    (c) => c.body?.includes(COMMENT_MARKER2)
-  );
-  if (existing) {
-    await octokit.rest.issues.updateComment({
-      owner,
-      repo,
-      comment_id: existing.id,
-      body
-    });
-    core3.info(`Updated PR comment #${existing.id}`);
-  } else {
-    await octokit.rest.issues.createComment({
-      owner,
-      repo,
-      issue_number: prNumber,
-      body
-    });
-    core3.info("Created new PR comment");
-  }
-}
 async function run() {
   validatedDiffJson = null;
   let keyDir = null;
@@ -56334,6 +56391,13 @@ async function run() {
     const rpcUrl = core3.getInput("rpc-url") || "http://localhost:8000/rpc";
     configuredRpcUrl = rpcUrl;
     const githubToken = core3.getInput("github-token");
+    const commentAuthorModeRaw = core3.getInput("comment-author-mode") || "github-actions";
+    if (commentAuthorModeRaw !== "github-actions" && commentAuthorModeRaw !== "authenticated-user") {
+      throw new Error(
+        `Unsupported comment-author-mode: "${commentAuthorModeRaw}". Supported values are "github-actions" and "authenticated-user".`
+      );
+    }
+    const commentAuthorMode = commentAuthorModeRaw;
     const baseRefInput = core3.getInput("base-ref", { trimWhitespace: false });
     const rustToolchain = core3.getInput("rust-toolchain");
     const reportPathInput = core3.getInput("report-path");
@@ -56527,7 +56591,10 @@ Commit or stash changes before running benchmarks.`
     if (githubToken) {
       core3.startGroup("Posting PR comment");
       try {
-        await upsertPrComment(githubToken, body);
+        await upsertPrComment(githubToken, body, {
+          commentAuthorMode,
+          core: core3
+        });
       } catch (err) {
         core3.warning(`Failed to post PR comment: ${err.message}`);
       }
