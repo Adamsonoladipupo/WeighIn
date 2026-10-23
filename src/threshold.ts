@@ -452,3 +452,126 @@ export function enforceThresholds(
 
   return violations;
 }
+
+/**
+ * Resolve the effective policy applied to a diff run into a structured, reportable form.
+ * Does not disclose unrelated configuration tokens or non-policy parameters.
+ */
+export function resolveEffectivePolicy(
+  diff: DiffResult,
+  config: WeighinConfig | null,
+  origin?: PolicyOrigin | null,
+): EffectivePolicyReport {
+  if (!config) {
+    return {
+      status: "absent",
+      report_only: true,
+      rules: [],
+    };
+  }
+
+  const global = config.thresholds?.global ?? {};
+  const perFunction = config.thresholds?.functions ?? {};
+  const globalLimits = config.limits?.global ?? {};
+  const functionLimits = config.limits?.functions ?? {};
+
+  const hasRules =
+    Boolean(global.fail_on_any_regression) ||
+    GLOBAL_RULE_MAP.some(({ field }) => global[field] !== undefined) ||
+    Object.keys(perFunction).length > 0 ||
+    Object.keys(globalLimits).length > 0 ||
+    Object.keys(functionLimits).length > 0;
+
+  if (!hasRules) {
+    return {
+      status: "empty",
+      mode: origin?.mode,
+      path: origin?.path,
+      revision: origin?.revision,
+      content_sha256: origin?.content_sha256,
+      report_only: true,
+      rules: [],
+    };
+  }
+
+  const rules: ResolvedRule[] = [];
+
+  // Global absolute limits
+  for (const [metric, limit] of Object.entries(globalLimits)) {
+    if (limit !== undefined) {
+      rules.push({
+        target: "global",
+        metric: metric as MetricKey,
+        rule: `absolute_limit(${limit})`,
+        source: "global",
+      });
+    }
+  }
+
+  // Global thresholds
+  if (global.fail_on_any_regression) {
+    for (const key of METRIC_KEYS) {
+      rules.push({
+        target: "global",
+        metric: key,
+        rule: "fail_on_any_regression",
+        source: "global",
+      });
+    }
+  }
+  for (const { field, metric, toRule } of GLOBAL_RULE_MAP) {
+    const val = global[field];
+    if (typeof val === "number") {
+      rules.push({
+        target: "global",
+        metric,
+        rule: toRule(val),
+        source: "global",
+      });
+    }
+  }
+
+  // Function limits & overrides
+  for (const contract of diff.contracts) {
+    for (const fn of contract.functions) {
+      const fnLimits = functionLimits[fn.function_name];
+      if (fnLimits) {
+        for (const [metric, limit] of Object.entries(fnLimits)) {
+          if (limit !== undefined) {
+            rules.push({
+              target: fn.function_name,
+              metric: metric as MetricKey,
+              rule: `absolute_limit(${limit})`,
+              source: "function_override",
+            });
+          }
+        }
+      }
+
+      const fnOverrides = perFunction[fn.function_name];
+      if (fnOverrides) {
+        for (const [metric, ruleVal] of Object.entries(fnOverrides)) {
+          if (ruleVal !== undefined) {
+            rules.push({
+              target: fn.function_name,
+              metric: metric as MetricKey,
+              rule: ruleVal,
+              source: ruleVal === "ignore" ? "ignore" : "function_override",
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    status: "active",
+    mode: origin?.mode,
+    path: origin?.path,
+    revision: origin?.revision,
+    content_sha256: origin?.content_sha256,
+    report_only: false,
+    fail_on_any_regression: global.fail_on_any_regression,
+    rules,
+  };
+}
