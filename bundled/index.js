@@ -71423,37 +71423,15 @@ async function ensureContractDeployed(options) {
     assertValidMinTtl(options.minTtlLedgers);
   }
   const minTtlLedgers = options.minTtlLedgers ?? DEFAULT_MIN_CONTRACT_TTL_LEDGERS;
-  const initialProbe = await probeContractInstance(server, options.contractId);
-  if (initialProbe.deployed) {
-    assertReusableTtl({
-      label: "instance",
-      contractId: options.contractId,
-      liveUntilLedgerSeq: initialProbe.liveUntilLedgerSeq,
-      latestLedger: initialProbe.latestLedger,
-      minTtlLedgers
-    });
-    const code = await probeContractCode(server, wasmHash, options.contractId);
-    assertReusableTtl({
-      label: "code",
-      contractId: options.contractId,
-      ...code,
-      minTtlLedgers
-    });
-    console.log(`Already deployed at ${options.contractId}`);
-    return {
-      source: "existing_instance",
-      return_xdr: Address.fromString(options.contractId).toScVal().toXDR("base64")
-    };
-  }
   const network = options.networkPassphrase ?? SUPPORTED_NETWORK_PASSPHRASE;
   return await withDeployerLock(network, deployer.publicKey(), async () => {
-    const lockedProbe = await probeContractInstance(server, options.contractId);
-    if (lockedProbe.deployed) {
+    const probe = await probeContractInstance(server, options.contractId);
+    if (probe.deployed) {
       assertReusableTtl({
         label: "instance",
         contractId: options.contractId,
-        liveUntilLedgerSeq: lockedProbe.liveUntilLedgerSeq,
-        latestLedger: lockedProbe.latestLedger,
+        liveUntilLedgerSeq: probe.liveUntilLedgerSeq,
+        latestLedger: probe.latestLedger,
         minTtlLedgers
       });
       const code = await probeContractCode(
