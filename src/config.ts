@@ -5,19 +5,26 @@ import { METRIC_KEYS } from "./diff";
 // weighin.toml Schema
 // ---------------------------------------------------------------------------
 
+export const PercentageSchema = z.number().finite().nonnegative();
+
+export function parseAllowPct(rule: string): number | null {
+  const m = rule.match(/^allow_(\d+(?:\.\d+)?)_percent_increase$/);
+  const value = m ? Number(m[1]) : NaN;
+  return Number.isFinite(value) ? value : null;
+}
+
 export const RuleValueSchema = z.union([
-  z.number(),
+  PercentageSchema,
   z.string().refine(
     (val) => {
       return (
         val === "ignore" ||
         val === "strict_zero_tolerance" ||
-        /^allow_[\d.]+_percent_increase$/.test(val)
+        parseAllowPct(val) !== null
       );
     },
     {
-      message:
-        "Invalid rule string. Must be 'ignore', 'strict_zero_tolerance', or 'allow_X_percent_increase'",
+      message: "Unsupported threshold rule",
     },
   ),
 ]);
@@ -25,19 +32,19 @@ export const RuleValueSchema = z.union([
 export const GlobalThresholdsSchema = z
   .object({
     fail_on_any_regression: z.boolean().optional(),
-    max_allowed_cpu_increase_pct: z.number().optional(),
-    max_allowed_memory_increase_pct: z.number().optional(),
+    max_allowed_cpu_increase_pct: PercentageSchema.optional(),
+    max_allowed_memory_increase_pct: PercentageSchema.optional(),
   })
   .strict();
 
 export const GlobalLimitsSchema = z.partialRecord(
   z.enum(METRIC_KEYS),
-  z.number().nonnegative(),
+  PercentageSchema,
 );
 
 export const FunctionLimitsSchema = z.partialRecord(
   z.enum(METRIC_KEYS),
-  z.number().nonnegative(),
+  PercentageSchema,
 );
 
 export const FunctionThresholdsSchema = z.partialRecord(
@@ -58,12 +65,8 @@ export const AggregateBudgetConfigSchema = z
   .object({
     description: z.string().optional(),
     members: z.array(BenchmarkSelectorSchema).min(1),
-    limits: z
-      .partialRecord(z.enum(METRIC_KEYS), z.number().nonnegative())
-      .optional(),
-    thresholds: z
-      .partialRecord(z.enum(METRIC_KEYS), RuleValueSchema)
-      .optional(),
+    limits: z.partialRecord(z.enum(METRIC_KEYS), PercentageSchema).optional(),
+    thresholds: FunctionThresholdsSchema.optional(),
   })
   .strict();
 
@@ -72,23 +75,31 @@ export type AggregateBudgetConfig = z.infer<typeof AggregateBudgetConfigSchema>;
 
 export const WeighinConfigSchema = z
   .object({
-    thresholds: z
-      .object({
-        global: GlobalThresholdsSchema.optional(),
-        functions: z.record(z.string(), FunctionThresholdsSchema).optional(),
-        aggregates: z.record(z.string(), FunctionThresholdsSchema).optional(),
-      })
-      .strict()
-      .optional(),
     limits: z
       .object({
         global: GlobalLimitsSchema.optional(),
-        functions: z.record(z.string(), FunctionLimitsSchema).optional(),
-        aggregates: z.record(z.string(), FunctionLimitsSchema).optional(),
+        functions: z.record(z.string().min(1), FunctionLimitsSchema).optional(),
+        aggregates: z
+          .record(z.string().min(1), FunctionLimitsSchema)
+          .optional(),
       })
       .strict()
       .optional(),
-    aggregates: z.record(z.string(), AggregateBudgetConfigSchema).optional(),
+    thresholds: z
+      .object({
+        global: GlobalThresholdsSchema.optional(),
+        functions: z
+          .record(z.string().min(1), FunctionThresholdsSchema)
+          .optional(),
+        aggregates: z
+          .record(z.string().min(1), FunctionThresholdsSchema)
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    aggregates: z
+      .record(z.string().min(1), AggregateBudgetConfigSchema)
+      .optional(),
   })
   .strict();
 

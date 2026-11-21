@@ -52208,29 +52208,35 @@ function diffBenchmarks(base, head, config3) {
 }
 
 // src/config.ts
+var PercentageSchema = external_exports.number().finite().nonnegative();
+function parseAllowPct(rule) {
+  const m = rule.match(/^allow_(\d+(?:\.\d+)?)_percent_increase$/);
+  const value = m ? Number(m[1]) : NaN;
+  return Number.isFinite(value) ? value : null;
+}
 var RuleValueSchema = external_exports.union([
-  external_exports.number(),
+  PercentageSchema,
   external_exports.string().refine(
     (val) => {
-      return val === "ignore" || val === "strict_zero_tolerance" || /^allow_[\d.]+_percent_increase$/.test(val);
+      return val === "ignore" || val === "strict_zero_tolerance" || parseAllowPct(val) !== null;
     },
     {
-      message: "Invalid rule string. Must be 'ignore', 'strict_zero_tolerance', or 'allow_X_percent_increase'"
+      message: "Unsupported threshold rule"
     }
   )
 ]);
 var GlobalThresholdsSchema = external_exports.object({
   fail_on_any_regression: external_exports.boolean().optional(),
-  max_allowed_cpu_increase_pct: external_exports.number().optional(),
-  max_allowed_memory_increase_pct: external_exports.number().optional()
+  max_allowed_cpu_increase_pct: PercentageSchema.optional(),
+  max_allowed_memory_increase_pct: PercentageSchema.optional()
 }).strict();
 var GlobalLimitsSchema = external_exports.partialRecord(
   external_exports.enum(METRIC_KEYS),
-  external_exports.number().nonnegative()
+  PercentageSchema
 );
 var FunctionLimitsSchema = external_exports.partialRecord(
   external_exports.enum(METRIC_KEYS),
-  external_exports.number().nonnegative()
+  PercentageSchema
 );
 var FunctionThresholdsSchema = external_exports.partialRecord(
   external_exports.enum(METRIC_KEYS),
@@ -52245,21 +52251,21 @@ var BenchmarkSelectorSchema = external_exports.object({
 var AggregateBudgetConfigSchema = external_exports.object({
   description: external_exports.string().optional(),
   members: external_exports.array(BenchmarkSelectorSchema).min(1),
-  limits: external_exports.partialRecord(external_exports.enum(METRIC_KEYS), external_exports.number().nonnegative()).optional(),
-  thresholds: external_exports.partialRecord(external_exports.enum(METRIC_KEYS), RuleValueSchema).optional()
+  limits: external_exports.partialRecord(external_exports.enum(METRIC_KEYS), PercentageSchema).optional(),
+  thresholds: FunctionThresholdsSchema.optional()
 }).strict();
 var WeighinConfigSchema = external_exports.object({
-  thresholds: external_exports.object({
-    global: GlobalThresholdsSchema.optional(),
-    functions: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional(),
-    aggregates: external_exports.record(external_exports.string(), FunctionThresholdsSchema).optional()
-  }).strict().optional(),
   limits: external_exports.object({
     global: GlobalLimitsSchema.optional(),
-    functions: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional(),
-    aggregates: external_exports.record(external_exports.string(), FunctionLimitsSchema).optional()
+    functions: external_exports.record(external_exports.string().min(1), FunctionLimitsSchema).optional(),
+    aggregates: external_exports.record(external_exports.string().min(1), FunctionLimitsSchema).optional()
   }).strict().optional(),
-  aggregates: external_exports.record(external_exports.string(), AggregateBudgetConfigSchema).optional()
+  thresholds: external_exports.object({
+    global: GlobalThresholdsSchema.optional(),
+    functions: external_exports.record(external_exports.string().min(1), FunctionThresholdsSchema).optional(),
+    aggregates: external_exports.record(external_exports.string().min(1), FunctionThresholdsSchema).optional()
+  }).strict().optional(),
+  aggregates: external_exports.record(external_exports.string().min(1), AggregateBudgetConfigSchema).optional()
 }).strict();
 var U64_MAX = 18446744073709551615n;
 var I64_MIN = -9223372036854775808n;
@@ -71866,61 +71872,14 @@ function comparePercentageToLimit(delta, base, limit) {
 
 // src/threshold.ts
 var crypto4 = __toESM(require("crypto"));
-var percentage = external_exports.number().finite().nonnegative();
-var ruleSchema = external_exports.union([
-  percentage,
-  external_exports.string().refine(
-    (value) => value === "ignore" || value === "strict_zero_tolerance" || parseAllowPct(value) !== null,
-    "Unsupported threshold rule"
-  )
-]);
-var metricRules = external_exports.object(
-  Object.fromEntries(METRIC_KEYS.map((key) => [key, ruleSchema.optional()]))
-).strict();
-var benchmarkSelectorSchema = external_exports.object({
-  fixture_id: external_exports.string().min(1).optional(),
-  logical_id: external_exports.string().min(1).optional(),
-  function_name: external_exports.string().min(1),
-  case_id: external_exports.string().min(1).optional()
-}).strict();
-var aggregateBudgetConfigSchema = external_exports.object({
-  description: external_exports.string().optional(),
-  members: external_exports.array(benchmarkSelectorSchema).min(1),
-  limits: external_exports.partialRecord(external_exports.enum(METRIC_KEYS), percentage).optional(),
-  thresholds: metricRules.optional()
-}).strict();
-var configSchema = external_exports.object({
-  limits: external_exports.object({
-    global: external_exports.partialRecord(external_exports.enum(METRIC_KEYS), percentage).optional(),
-    functions: external_exports.record(
-      external_exports.string().min(1),
-      external_exports.partialRecord(external_exports.enum(METRIC_KEYS), percentage)
-    ).optional(),
-    aggregates: external_exports.record(
-      external_exports.string().min(1),
-      external_exports.partialRecord(external_exports.enum(METRIC_KEYS), percentage)
-    ).optional()
-  }).strict().optional(),
-  thresholds: external_exports.object({
-    global: external_exports.object({
-      fail_on_any_regression: external_exports.boolean().optional(),
-      max_allowed_cpu_increase_pct: percentage.optional(),
-      max_allowed_memory_increase_pct: percentage.optional()
-    }).strict().optional(),
-    functions: external_exports.record(external_exports.string().min(1), metricRules).optional(),
-    aggregates: external_exports.record(external_exports.string().min(1), metricRules).optional()
-  }).strict().optional(),
-  aggregates: external_exports.record(external_exports.string().min(1), aggregateBudgetConfigSchema).optional()
-}).strict();
-function validateConfig(value) {
-  const parsed = configSchema.safeParse(value);
-  if (!parsed.success)
-    throw new Error(formatZodError(parsed.error, "weighin.toml"));
+function validateConfig(value, filename = "weighin.toml") {
+  const parsed = WeighinConfigSchema.safeParse(value);
+  if (!parsed.success) throw new Error(formatZodError(parsed.error, filename));
   return parsed.data;
 }
 function loadConfigContent(content, sourcePath) {
   try {
-    return validateConfig(TOML.parse(content));
+    return validateConfig(TOML.parse(content), sourcePath);
   } catch (error63) {
     if (error63 instanceof Error && error63.message.startsWith("Invalid WeighIn configuration"))
       throw error63;
@@ -71929,11 +71888,6 @@ function loadConfigContent(content, sourcePath) {
 }
 function policyContentSha256(content) {
   return crypto4.createHash("sha256").update(content, "utf8").digest("hex");
-}
-function parseAllowPct(rule) {
-  const m = rule.match(/^allow_(\d+(?:\.\d+)?)_percent_increase$/);
-  const value = m ? Number(m[1]) : NaN;
-  return Number.isFinite(value) ? value : null;
 }
 function evaluateRule(rule, diff, contractId, functionName) {
   const ruleStr = typeof rule === "number" ? `allow_${rule}_percent_increase` : rule;

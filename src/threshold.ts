@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as TOML from "toml";
 import { z } from "zod";
-import { formatZodError } from "./config";
+import { formatZodError, WeighinConfigSchema, parseAllowPct } from "./config";
 import {
   DiffResult,
   METRIC_KEYS,
@@ -79,86 +79,13 @@ export interface EffectivePolicyReport {
   rules: ResolvedRule[];
 }
 
-const percentage = z.number().finite().nonnegative();
-const ruleSchema = z.union([
-  percentage,
-  z
-    .string()
-    .refine(
-      (value) =>
-        value === "ignore" ||
-        value === "strict_zero_tolerance" ||
-        parseAllowPct(value) !== null,
-      "Unsupported threshold rule",
-    ),
-]);
-const metricRules = z
-  .object(
-    Object.fromEntries(METRIC_KEYS.map((key) => [key, ruleSchema.optional()])),
-  )
-  .strict();
-const benchmarkSelectorSchema = z
-  .object({
-    fixture_id: z.string().min(1).optional(),
-    logical_id: z.string().min(1).optional(),
-    function_name: z.string().min(1),
-    case_id: z.string().min(1).optional(),
-  })
-  .strict();
-const aggregateBudgetConfigSchema = z
-  .object({
-    description: z.string().optional(),
-    members: z.array(benchmarkSelectorSchema).min(1),
-    limits: z.partialRecord(z.enum(METRIC_KEYS), percentage).optional(),
-    thresholds: metricRules.optional(),
-  })
-  .strict();
-const configSchema = z
-  .object({
-    limits: z
-      .object({
-        global: z.partialRecord(z.enum(METRIC_KEYS), percentage).optional(),
-        functions: z
-          .record(
-            z.string().min(1),
-            z.partialRecord(z.enum(METRIC_KEYS), percentage),
-          )
-          .optional(),
-        aggregates: z
-          .record(
-            z.string().min(1),
-            z.partialRecord(z.enum(METRIC_KEYS), percentage),
-          )
-          .optional(),
-      })
-      .strict()
-      .optional(),
-    thresholds: z
-      .object({
-        global: z
-          .object({
-            fail_on_any_regression: z.boolean().optional(),
-            max_allowed_cpu_increase_pct: percentage.optional(),
-            max_allowed_memory_increase_pct: percentage.optional(),
-          })
-          .strict()
-          .optional(),
-        functions: z.record(z.string().min(1), metricRules).optional(),
-        aggregates: z.record(z.string().min(1), metricRules).optional(),
-      })
-      .strict()
-      .optional(),
-    aggregates: z
-      .record(z.string().min(1), aggregateBudgetConfigSchema)
-      .optional(),
-  })
-  .strict();
-
 /** Validate policies independently of whether a benchmark happened to regress. */
-export function validateConfig(value: unknown): WeighinConfig {
-  const parsed = configSchema.safeParse(value);
-  if (!parsed.success)
-    throw new Error(formatZodError(parsed.error, "weighin.toml"));
+export function validateConfig(
+  value: unknown,
+  filename = "weighin.toml",
+): WeighinConfig {
+  const parsed = WeighinConfigSchema.safeParse(value);
+  if (!parsed.success) throw new Error(formatZodError(parsed.error, filename));
   return parsed.data as WeighinConfig;
 }
 
@@ -176,7 +103,7 @@ export function loadConfig(configPath: string): WeighinConfig | null {
   }
   const raw = fs.readFileSync(configPath, "utf8");
   try {
-    return validateConfig(TOML.parse(raw));
+    return validateConfig(TOML.parse(raw), configPath);
   } catch (error: any) {
     if (
       error instanceof Error &&
@@ -193,7 +120,7 @@ export function loadConfigContent(
   sourcePath: string,
 ): WeighinConfig {
   try {
-    return validateConfig(TOML.parse(content));
+    return validateConfig(TOML.parse(content), sourcePath);
   } catch (error: any) {
     if (
       error instanceof Error &&
@@ -225,13 +152,6 @@ export interface Violation {
   rule: string;
   rule_source?: string;
   message: string;
-}
-
-function parseAllowPct(rule: string): number | null {
-  // Matches "allow_10_percent_increase", "allow_2.5_percent_increase", etc.
-  const m = rule.match(/^allow_(\d+(?:\.\d+)?)_percent_increase$/);
-  const value = m ? Number(m[1]) : NaN;
-  return Number.isFinite(value) ? value : null;
 }
 
 function evaluateRule(
