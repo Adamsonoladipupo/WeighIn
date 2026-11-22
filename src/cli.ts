@@ -4,6 +4,8 @@ import * as path from "path";
 import { execSync } from "child_process";
 import { runMeasurement } from "./measurement";
 import { parseFixtures } from "./identity";
+import { diffBenchmarks, type DiffResult } from "./diff";
+import { enforceThresholds, loadConfig } from "./threshold";
 import { discoverSdkAssociations, formatSdkVersions } from "./sdk-version";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
 
@@ -22,6 +24,7 @@ export interface CliOptions {
   helperPath?: string;
   jsonStdout: boolean;
   allowCrossTargetSubstitution: boolean;
+  baseFixturesPath?: string | null;
 }
 
 export type CliCommand =
@@ -72,6 +75,7 @@ export function parseArgs(
   rawArgs: string[] = process.argv.slice(2),
 ): CliCommand {
   let fixturesPath: string | null = null;
+  let baseFixturesPath: string | null = null;
   let positionalOutputPath: string | null = null;
   let optionOutputPath: string | null = null;
   let positionalCount = 0;
@@ -156,9 +160,19 @@ export function parseArgs(
     } else if (positionalCount === 2) {
       if (arg === "-") {
         jsonStdout = true;
-      } else {
+      } else if (!baseFixturesPath) {
+        // Second positional is treated as output path when no base comparison
+        // is configured; it falls back to baseFixturesPath only when a base
+        // fixtures path is explicitly needed for comparison mode.
         positionalOutputPath = arg;
+      } else {
+        // baseFixturesPath already set (comparison mode); second positional is
+        // ignored for output but still tracked as a positional argument.
+        ;
       }
+    } else if (positionalCount === 3 && baseFixturesPath) {
+      // Third positional is the output path
+      positionalOutputPath = arg;
     } else {
       throw new Error(`Unexpected argument: ${arg}`);
     }
@@ -179,6 +193,11 @@ export function parseArgs(
     );
   }
 
+  // If baseFixturesPath is set, ensure output is not jsonStdout (we need to write files)
+  if (jsonStdout && baseFixturesPath) {
+    throw new Error("Cannot use --json-stdout with base fixtures comparison");
+  }
+
   const outputFile = optionOutputPath ?? positionalOutputPath;
   return {
     kind: "measure",
@@ -189,6 +208,7 @@ export function parseArgs(
       helperPath,
       jsonStdout,
       allowCrossTargetSubstitution,
+      baseFixturesPath,
     },
   };
 }
@@ -226,6 +246,7 @@ async function main() {
     jsonStdout,
     helperPath,
     allowCrossTargetSubstitution,
+    baseFixturesPath,
   } = command.options;
   const gitCommit = getGitCommit();
 
@@ -280,7 +301,8 @@ async function main() {
     console.log(`Commit:   ${gitCommit}`);
     console.log(`SDK:      ${sdkSummary}`);
 
-    const results = await runMeasurement({
+    // Measure HEAD fixtures
+    const headResults = await runMeasurement({
       fixturesPath,
       gitCommit,
       rpcUrl,
@@ -288,11 +310,98 @@ async function main() {
       allowCrossTargetSubstitution,
     });
 
+    // Ensure headResults is an array for consistent processing
+    const headResultsArray = Array.isArray(headResults)
+      ? headResults
+      : [headResults];
+
+    // If base fixtures path is provided, measure base and compute diff
+    let config: import("./threshold").WeighinConfig | null = null;
+    let violations: import("./threshold").Violation[] = [];
+    let totalBenchmarks = 0;
+    let benchmarksWithViolations = new Set<string>();
+
+    if (baseFixturesPath) {
+      const baseResults = await runMeasurement({
+        fixturesPath: baseFixturesPath,
+        gitCommit: "unknown",
+        rpcUrl,
+        helperPath,
+        allowCrossTargetSubstitution,
+      });
+
+      const diff = diffBenchmarks(baseResults, headResultsArray);
+      config = loadConfig("weighin.toml");
+      violations = enforceThresholds(diff, config);
+
+      // Count total benchmarks from head results
+      totalBenchmarks = headResultsArray.flatMap(
+        (c) => c.benchmarks ?? [],
+      ).length;
+
+      // Track which benchmarks have violations (by function_name + case_id)
+      for (const v of violations) {
+        const key = `${v.function_name ?? "unknown"}:${v.case_id ?? "no-case"}`;
+        benchmarksWithViolations.add(key);
+      }
+    } else {
+      // No base comparison: all measured benchmarks are tracked for violation counts
+      totalBenchmarks = headResultsArray.flatMap(
+        (c) => c.benchmarks ?? [],
+      ).length;
+      config = loadConfig("weighin.toml");
+      violations = enforceThresholds(
+        {
+          contracts: [],
+          hasRegression: false,
+          newContracts: [],
+          removedContracts: [],
+        } as DiffResult,
+        config,
+      );
+      // Without base comparison, still track violations from config enforcement
+      for (const v of violations) {
+        const key = `${v.function_name ?? "unknown"}:${v.case_id ?? "no-case"}`;
+        benchmarksWithViolations.add(key);
+      }
+    }
+
+    // Determine counts
+    const violationCount = violations.length;
+    const allPassed = violationCount === 0;
+
+    // Calculate passed benchmarks: total - benchmarks with at least one violation
+    const passedCount = totalBenchmarks - benchmarksWithViolations.size;
+
+    // Display summary
+    const benchmarkLabel = totalBenchmarks === 1 ? "benchmark" : "benchmarks";
+    const violationLabel = violationCount === 1 ? "violation" : "violations";
+
+    if (allPassed) {
+      console.log(
+        `✔ ${totalBenchmarks} ${benchmarkLabel} passed, 0 ${violationLabel}`,
+      );
+    } else {
+      console.log(
+        `✖ ${passedCount} ${benchmarkLabel} passed, ${violationCount} ${violationLabel} detected`,
+      );
+    }
+
+    // Write results file if not jsonStdout
     if (jsonStdout) {
-      process.stdout.write(JSON.stringify(results, null, 2) + "\n");
+      process.stdout.write(JSON.stringify(headResults, null, 2) + "\n");
     } else if (outputPath) {
-      fs.writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf8");
+      fs.writeFileSync(
+        outputPath,
+        JSON.stringify(headResults, null, 2),
+        "utf8",
+      );
       console.log(`Done. Results written to ${outputPath}`);
+    }
+
+    // Exit code: 0 when all pass, 1 when violations occur
+    if (!allPassed) {
+      process.exit(1);
     }
   } catch (error: any) {
     const detail = String(error?.stack ?? error?.message ?? error);

@@ -1,10 +1,15 @@
 # Node
 node_modules/
 dist/
+bundled/
 
 # Rust build artifacts
 target/
 contract/target/
+
+# Coverage reports and vitest artifacts
+coverage/
+.vitest/
 
 # Weighin runtime files
 .weighin-temp-key
@@ -12,9 +17,17 @@ weighin-results.json
 weighin-report.md
 pr-metadata.json
 
+# Generated provenance manifest
+provenance-manifest.json
+
 # Misc
 *.tar.bz2
 *.tar.gz
+
+# Local configuration files and caches
+.env*.local
+.env*.json
+.cache/
 
 # Local agent instructions and operational records
 .codex/
