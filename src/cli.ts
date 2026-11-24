@@ -8,6 +8,7 @@ import { diffBenchmarks, type DiffResult } from "./diff";
 import { enforceThresholds, loadConfig } from "./threshold";
 import { discoverSdkAssociations, formatSdkVersions } from "./sdk-version";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
+import { runDoctor, formatDoctorReport } from "./doctor";
 
 function getGitCommit(): string {
   try {
@@ -30,6 +31,7 @@ export interface CliOptions {
 export type CliCommand =
   | { kind: "help" }
   | { kind: "version" }
+  | { kind: "doctor"; rpcUrl: string }
   | { kind: "measure"; options: CliOptions };
 
 const DEFAULT_FIXTURES_PATH = "weighin-fixtures.json";
@@ -37,6 +39,8 @@ const DEFAULT_OUTPUT_PATH = "weighin-results.json";
 const DEFAULT_RPC_URL = "http://localhost:8000/rpc";
 
 export const USAGE = "Usage: weighin [options] [fixtures.json] [results.json]";
+
+export const DOCTOR_USAGE = "Usage: weighin doctor [--rpc-url <url>]";
 
 export const HELP_TEXT = `${USAGE}
 
@@ -58,7 +62,11 @@ Options:
                         Allow cross-target WASM substitution
   --                    Treat remaining arguments as positional paths
   -h, --help            Show this help and exit
-  --version             Show the installed package version and exit`;
+  --version             Show the installed package version and exit
+
+Subcommands:
+  doctor                Check the local environment for required prerequisites
+                        (read-only; exits 0 when healthy, 1 when not)`;
 
 function readPackageVersion(): string {
   const packagePath = path.resolve(__dirname, "..", "package.json");
@@ -74,6 +82,34 @@ function readPackageVersion(): string {
 export function parseArgs(
   rawArgs: string[] = process.argv.slice(2),
 ): CliCommand {
+  // The doctor subcommand is dispatched before full option parsing.
+  if (rawArgs[0] === "doctor") {
+    const doctorArgs = rawArgs.slice(1);
+    let rpcUrl = DEFAULT_RPC_URL;
+    const seenDoctorOptions = new Set<string>();
+    for (let i = 0; i < doctorArgs.length; i++) {
+      const arg = doctorArgs[i];
+      if (arg === "--rpc-url") {
+        if (seenDoctorOptions.has(arg))
+          throw new Error(`Duplicate option: ${arg}`);
+        seenDoctorOptions.add(arg);
+        const value = doctorArgs[i + 1];
+        if (value === undefined || value.startsWith("--") || !value.trim()) {
+          throw new Error("--rpc-url requires a value");
+        }
+        rpcUrl = value;
+        i++;
+      } else if (arg === "--help" || arg === "-h") {
+        return { kind: "help" };
+      } else if (arg.startsWith("--")) {
+        throw new Error(`Unknown option: ${arg}`);
+      } else {
+        throw new Error(`Unexpected argument: ${arg}`);
+      }
+    }
+    return { kind: "doctor", rpcUrl };
+  }
+
   let fixturesPath: string | null = null;
   let baseFixturesPath: string | null = null;
   let positionalOutputPath: string | null = null;
@@ -233,6 +269,14 @@ async function main() {
       process.stdout.write(`${readPackageVersion()}\n`);
     } catch (err: any) {
       console.error(err.message);
+      process.exit(1);
+    }
+    return;
+  }
+  if (command.kind === "doctor") {
+    const report = await runDoctor({ rpcUrl: command.rpcUrl });
+    process.stdout.write(`${formatDoctorReport(report)}\n`);
+    if (!report.healthy) {
       process.exit(1);
     }
     return;
