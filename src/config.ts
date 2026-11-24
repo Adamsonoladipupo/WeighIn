@@ -331,11 +331,19 @@ const TopLevelInvocationArgSchema = z.unknown().transform((val, ctx) => {
   return result.data;
 });
 
-export const InvocationSpecSchema = z
+export const SetupInvocationSpecSchema = z
   .object({
     id: idSchema.optional(),
     function_name: z.string().min(1),
     args: z.array(TopLevelInvocationArgSchema),
+  })
+  .strict();
+
+export const InvocationSpecSchema = z
+  .object({
+    id: idSchema.optional(),
+    function_name: z.string().min(1),
+    args: z.array(TopLevelInvocationArgSchema).default([]),
   })
   .strict();
 
@@ -344,6 +352,7 @@ export const ContractSpecSchema = z
     id: idSchema.optional(),
     wasm_path: z.string().min(1),
     depends_on: z.array(idSchema).optional(),
+    setup_invocations: z.array(SetupInvocationSpecSchema).optional(),
     invocations: z.array(InvocationSpecSchema).min(1),
   })
   .strict();
@@ -361,6 +370,7 @@ type JsonSchemaObject = Record<string, unknown>;
 export function getFixturesJsonSchema(): JsonSchemaObject {
   const schema = z.toJSONSchema(FixturesSpecSchema, {
     unrepresentable: "any",
+    io: "input",
   }) as JsonSchemaObject;
   const properties = schema.properties as JsonSchemaObject;
   const contracts = properties.contracts as JsonSchemaObject;
@@ -396,6 +406,15 @@ export function getFixturesJsonSchema(): JsonSchemaObject {
   nonBlank(
     (bindingObject.properties as JsonSchemaObject).contract as JsonSchemaObject,
   );
+  const setupInvocations = contractProperties.setup_invocations as
+    JsonSchemaObject | undefined;
+  if (setupInvocations) {
+    const setupItem = setupInvocations.items as JsonSchemaObject;
+    const setupProperties = setupItem.properties as JsonSchemaObject;
+    nonBlank(setupProperties.id as JsonSchemaObject | undefined);
+    const setupArgs = setupProperties.args as JsonSchemaObject;
+    setupArgs.items = { anyOf: [literal, binding] };
+  }
   args.items = { anyOf: [literal, binding] };
   schema.$id =
     "https://raw.githubusercontent.com/WeighInNG/WeighIn/main/docs/schemas/weighin-fixtures.schema.json";
@@ -434,5 +453,6 @@ export type RuleValue = z.infer<typeof RuleValueSchema>;
 export type GlobalThresholds = z.infer<typeof GlobalThresholdsSchema>;
 export type InvocationArg = z.infer<typeof InvocationArgSchema>;
 export type BoundInvocationArg = z.infer<typeof BoundInvocationArgSchema>;
+export type SetupInvocationSpec = z.infer<typeof SetupInvocationSpecSchema>;
 export type InvocationSpec = z.infer<typeof InvocationSpecSchema>;
 export type ContractSpec = z.infer<typeof ContractSpecSchema>;

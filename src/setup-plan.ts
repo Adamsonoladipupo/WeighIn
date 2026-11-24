@@ -67,6 +67,17 @@ export function planSetupOrder(
     });
     dependencies.set(contract, resolved);
 
+    (contract.setup_invocations ?? []).forEach((setup, setupIndex) => {
+      const setupLabel = setup.id ? `id:${setup.id}` : `setup[${setupIndex}]`;
+      setup.args.forEach((arg, index) => {
+        if (!("binding" in arg)) return;
+        if (!seen.has(arg.binding.contract))
+          fail(
+            `${contract.logical_id} / ${setupLabel} (${setup.function_name}) argument ${index} binds "${arg.binding.contract}", which is not a declared dependency of this contract`,
+          );
+      });
+    });
+
     for (const invocation of contract.invocations) {
       invocation.args.forEach((arg, index) => {
         if (!("binding" in arg)) return;

@@ -74,6 +74,18 @@ export function parseFixtures(
     }
     contractIds.add(logical_id);
 
+    const setupIds = new Set<string>();
+    for (const setup of contract.setup_invocations ?? []) {
+      if (setup.id !== undefined) {
+        if (setupIds.has(setup.id)) {
+          throw new Error(
+            `Duplicate setup invocation id in ${logical_id}: id:${setup.id}`,
+          );
+        }
+        setupIds.add(setup.id);
+      }
+    }
+
     const caseIds = new Set<string>();
     const invocations = contract.invocations.map((invocation) => {
       // A bound argument is identified by its declared reference, never by the

@@ -52445,15 +52445,21 @@ var TopLevelInvocationArgSchema = external_exports.unknown().transform((val, ctx
   }
   return result.data;
 });
-var InvocationSpecSchema = external_exports.object({
+var SetupInvocationSpecSchema = external_exports.object({
   id: idSchema.optional(),
   function_name: external_exports.string().min(1),
   args: external_exports.array(TopLevelInvocationArgSchema)
+}).strict();
+var InvocationSpecSchema = external_exports.object({
+  id: idSchema.optional(),
+  function_name: external_exports.string().min(1),
+  args: external_exports.array(TopLevelInvocationArgSchema).default([])
 }).strict();
 var ContractSpecSchema = external_exports.object({
   id: idSchema.optional(),
   wasm_path: external_exports.string().min(1),
   depends_on: external_exports.array(idSchema).optional(),
+  setup_invocations: external_exports.array(SetupInvocationSpecSchema).optional(),
   invocations: external_exports.array(InvocationSpecSchema).min(1)
 }).strict();
 var FixturesSpecSchema = external_exports.object({
@@ -52462,7 +52468,8 @@ var FixturesSpecSchema = external_exports.object({
 }).strict();
 function getFixturesJsonSchema() {
   const schema = external_exports.toJSONSchema(FixturesSpecSchema, {
-    unrepresentable: "any"
+    unrepresentable: "any",
+    io: "input"
   });
   const properties = schema.properties;
   const contracts = properties.contracts;
@@ -52495,6 +52502,14 @@ function getFixturesJsonSchema() {
   nonBlank(
     bindingObject.properties.contract
   );
+  const setupInvocations = contractProperties.setup_invocations;
+  if (setupInvocations) {
+    const setupItem = setupInvocations.items;
+    const setupProperties = setupItem.properties;
+    nonBlank(setupProperties.id);
+    const setupArgs = setupProperties.args;
+    setupArgs.items = { anyOf: [literal2, binding] };
+  }
   args.items = { anyOf: [literal2, binding] };
   schema.$id = "https://raw.githubusercontent.com/WeighInNG/WeighIn/main/docs/schemas/weighin-fixtures.schema.json";
   schema.title = "WeighIn fixture declarations";
@@ -52555,6 +52570,17 @@ function parseFixtures(raw, fixturePath) {
       );
     }
     contractIds.add(logical_id);
+    const setupIds = /* @__PURE__ */ new Set();
+    for (const setup of contract.setup_invocations ?? []) {
+      if (setup.id !== void 0) {
+        if (setupIds.has(setup.id)) {
+          throw new Error(
+            `Duplicate setup invocation id in ${logical_id}: id:${setup.id}`
+          );
+        }
+        setupIds.add(setup.id);
+      }
+    }
     const caseIds = /* @__PURE__ */ new Set();
     const invocations = contract.invocations.map((invocation) => {
       const args = invocation.args.map(
@@ -70874,6 +70900,16 @@ function planSetupOrder(fixtureId, contracts) {
       return dependency;
     });
     dependencies.set(contract, resolved);
+    (contract.setup_invocations ?? []).forEach((setup, setupIndex) => {
+      const setupLabel = setup.id ? `id:${setup.id}` : `setup[${setupIndex}]`;
+      setup.args.forEach((arg, index) => {
+        if (!("binding" in arg)) return;
+        if (!seen.has(arg.binding.contract))
+          fail(
+            `${contract.logical_id} / ${setupLabel} (${setup.function_name}) argument ${index} binds "${arg.binding.contract}", which is not a declared dependency of this contract`
+          );
+      });
+    });
     for (const invocation of contract.invocations) {
       invocation.args.forEach((arg, index) => {
         if (!("binding" in arg)) return;
@@ -71245,7 +71281,7 @@ function scrubEndpoint(message, rpcUrl) {
 function hashLabel(hash3) {
   return isTransactionHash(hash3) ? hash3 : "none";
 }
-async function submitAndConfirm(server, prepared, phase, rpcUrl, signal) {
+async function submitAndConfirmWithHash(server, prepared, phase, rpcUrl, signal) {
   if (signal?.aborted) {
     throw signal.reason || new Error(`${phase} cancelled`);
   }
@@ -71287,6 +71323,16 @@ async function submitAndConfirm(server, prepared, phase, rpcUrl, signal) {
       `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`
     );
   }
+  return { confirmed, txHash: submission.hash };
+}
+async function submitAndConfirm(server, prepared, phase, rpcUrl, signal) {
+  const { confirmed } = await submitAndConfirmWithHash(
+    server,
+    prepared,
+    phase,
+    rpcUrl,
+    signal
+  );
   return confirmed;
 }
 async function probeContractInstance(server, contractId) {
@@ -71427,6 +71473,11 @@ async function ensureContractDeployed(options) {
   return await withDeployerLock(network, deployer.publicKey(), async () => {
     const probe = await probeContractInstance(server, options.contractId);
     if (probe.deployed) {
+      if (options.requireFreshDeployment) {
+        throw new Error(
+          `Contract ${options.contractId} is already deployed on the network; refusing to run setup invocations against pre-existing state`
+        );
+      }
       assertReusableTtl({
         label: "instance",
         contractId: options.contractId,
@@ -71508,6 +71559,114 @@ async function ensureContractDeployed(options) {
       return_xdr: result.toXDR("base64")
     };
   });
+}
+function assertSupportedSetupAuthorization(prepared, phase) {
+  const operations = prepared.operations;
+  if (!Array.isArray(operations)) return;
+  for (const op of operations) {
+    if (!op || typeof op !== "object" || op.type !== "invokeHostFunction") {
+      continue;
+    }
+    const authEntries = op.auth;
+    if (!Array.isArray(authEntries)) continue;
+    for (const entry of authEntries) {
+      const credSwitch = typeof entry?.credentials === "function" ? entry.credentials()?.switch?.()?.name : void 0;
+      if (credSwitch !== void 0 && credSwitch !== "sorobanCredentialsSourceAccount") {
+        throw new Error(
+          `${phase} requires unsupported authorization (${credSwitch}); standalone committed setup supports only deployer source-account authorization`
+        );
+      }
+    }
+  }
+}
+async function commitSetupInvocations(options) {
+  const {
+    server,
+    deployer,
+    contractId,
+    logicalId,
+    setupInvocations,
+    setupResults,
+    rpcUrl,
+    signal
+  } = options;
+  const receipts = [];
+  for (let i = 0; i < setupInvocations.length; i++) {
+    const setupCall = setupInvocations[i];
+    const stepLabel = setupCall.id ? `${setupCall.id} (${setupCall.function_name})` : `#${i + 1} (${setupCall.function_name})`;
+    const phase = `setup invocation ${stepLabel} on ${logicalId}`;
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`${phase} cancelled`);
+    }
+    const argsSc = setupCall.args.map((arg) => {
+      if (!("binding" in arg)) return toScVal(arg);
+      if (!setupResults) {
+        throw new Error(
+          `Setup bindings are not available in this setup path: ${setupCall.function_name} binds "${arg.binding.contract}"`
+        );
+      }
+      return resolveBinding(
+        arg.binding,
+        arg.type.toLowerCase(),
+        setupResults.get(arg.binding.contract)
+      );
+    });
+    let account;
+    try {
+      account = await server.getAccount(deployer.publicKey());
+    } catch (err) {
+      if (signal?.aborted) {
+        throw signal.reason || new Error(`${phase} cancelled`);
+      }
+      throw new Error(
+        `${phase} failed to load deployer account at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}`
+      );
+    }
+    const setupTx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE
+    }).addOperation(
+      Operation.invokeContractFunction({
+        contract: contractId,
+        function: setupCall.function_name,
+        args: argsSc
+      })
+    ).setTimeout(30).build();
+    let prepared;
+    try {
+      prepared = await server.prepareTransaction(setupTx);
+    } catch (err) {
+      if (signal?.aborted) {
+        throw signal.reason || new Error(`${phase} cancelled`);
+      }
+      throw new Error(
+        `${phase} preparation failed at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}`
+      );
+    }
+    assertSupportedSetupAuthorization(prepared, phase);
+    prepared.sign(deployer);
+    const { confirmed, txHash } = await submitAndConfirmWithHash(
+      server,
+      prepared,
+      phase,
+      rpcUrl,
+      signal
+    );
+    const returnXdr = confirmed.returnValue instanceof types.ScVal ? confirmed.returnValue.toXDR("base64") : void 0;
+    const ledger = typeof confirmed.ledger === "number" ? confirmed.ledger : void 0;
+    console.log(
+      `Committed ${phase} (tx=${txHash}${ledger !== void 0 ? `, ledger=${ledger}` : ""})`
+    );
+    receipts.push({
+      step: i,
+      ...setupCall.id !== void 0 ? { id: setupCall.id } : {},
+      function_name: setupCall.function_name,
+      tx_hash: txHash,
+      ...ledger !== void 0 ? { ledger } : {},
+      ...returnXdr !== void 0 ? { return_xdr: returnXdr } : {}
+    });
+  }
+  return receipts;
 }
 async function buildInvocationTransaction(options) {
   const { server, sourceAccount, contractId, invocation } = options;
@@ -71608,6 +71767,31 @@ function validateWasmArtifact(fixturesDir, declaredWasmPath, options) {
   }
   return { resolvedPath };
 }
+function preflightSetupArguments(fixtureId, contracts) {
+  const errors = [];
+  for (const contract of contracts) {
+    const contractLabel2 = contract.logical_id ?? (contract.id ? `id:${contract.id}` : `wasm:${contract.wasm_path}`);
+    (contract.setup_invocations ?? []).forEach((setup, setupIndex) => {
+      const stepLabel = setup.id ? `id:${setup.id}` : `setup[${setupIndex}]`;
+      setup.args.forEach((arg, argIndex) => {
+        if ("binding" in arg) return;
+        try {
+          toScVal(arg);
+        } catch (err) {
+          errors.push(
+            `[${fixtureId} / ${contractLabel2} / ${stepLabel} (${setup.function_name}) arg ${argIndex}] ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      });
+    });
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `Preflight validation failed for configured setup invocations:
+${errors.join("\n")}`
+    );
+  }
+}
 function preflightContractArtifacts(fixturesDir, contracts, fixtureId, options) {
   const resolvedPaths = /* @__PURE__ */ new Map();
   const errors = [];
@@ -71670,6 +71854,7 @@ async function measureWithKeyFile(opts, keyFile) {
     fixturesSpec.fixture_id,
     fixturesSpec.contracts
   );
+  preflightSetupArguments(fixturesSpec.fixture_id, fixturesSpec.contracts);
   const resolvedWasmPaths = preflightContractArtifacts(
     fixturesDir,
     fixturesSpec.contracts,
@@ -71701,7 +71886,9 @@ async function measureWithKeyFile(opts, keyFile) {
     const wasmSha256 = wasmHash.toString("hex");
     console.log(`WASM: ${wasmPath}`);
     console.log(`WASM SHA256: ${wasmSha256}`);
-    const salt = crypto3.createHash("sha256").update(wasmHash).digest();
+    const setupInvocations = contractSpec.setup_invocations ?? [];
+    const hasSetupInvocations = setupInvocations.length > 0;
+    const salt = hasSetupInvocations ? crypto3.randomBytes(32) : crypto3.createHash("sha256").update(wasmHash).digest();
     const contractId = calculateContractId(deployer.publicKey(), salt);
     console.log(`Contract ID: ${contractId}`);
     let receipt;
@@ -71717,8 +71904,21 @@ async function measureWithKeyFile(opts, keyFile) {
         rpcUrl: effectiveRpcUrl,
         signal: opts.signal,
         minTtlLedgers: opts.minTtlLedgers,
-        networkPassphrase: opts.networkPassphrase ?? SUPPORTED_NETWORK_PASSPHRASE
+        networkPassphrase: opts.networkPassphrase ?? SUPPORTED_NETWORK_PASSPHRASE,
+        requireFreshDeployment: hasSetupInvocations
       });
+      if (hasSetupInvocations) {
+        await commitSetupInvocations({
+          server,
+          deployer,
+          contractId,
+          logicalId: contractSpec.logical_id,
+          setupInvocations,
+          setupResults,
+          rpcUrl: effectiveRpcUrl,
+          signal: opts.signal
+        });
+      }
     } catch (err) {
       const aborted2 = dependentsOf(contractSpec, setupOrder);
       if (opts.signal?.aborted || aborted2.length === 0) throw err;

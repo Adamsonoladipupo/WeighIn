@@ -4,6 +4,7 @@ import {
   calculateDiff,
   formatDiffDelta,
   getMetricBadge,
+  formatByteCount,
 } from "../src/diff";
 import {
   trend,
@@ -496,5 +497,11 @@ describe("diffBenchmarks", () => {
       expect(commentPassed).toContain("**All thresholds passed**");
       expect(commentPassed).not.toContain("### ❌ Violations");
     });
+  });
+
+  it("formats byte counts correctly", () => {
+    expect(formatByteCount(500)).toBe("500 B");
+    expect(formatByteCount(2048)).toBe("2.00 KB");
+    expect(formatByteCount(10485760)).toBe("10.00 MB");
   });
 });

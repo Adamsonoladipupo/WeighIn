@@ -106,6 +106,12 @@ export interface BoundInvocationArg {
   binding: SetupBinding;
 }
 
+export interface SetupInvocationSpec {
+  id?: string;
+  function_name: string;
+  args: Array<InvocationArg | BoundInvocationArg>;
+}
+
 export interface InvocationSpec {
   id?: string;
   function_name: string;
@@ -117,6 +123,8 @@ export interface ContractSpec {
   wasm_path: string;
   /** Explicit ids of contracts that must be committed before this one. */
   depends_on?: string[];
+  /** Ordered setup calls prepared, signed, submitted, and confirmed after deployment and before measurement. */
+  setup_invocations?: SetupInvocationSpec[];
   invocations: InvocationSpec[];
 }
 
@@ -452,13 +460,16 @@ function hashLabel(hash: unknown): string {
 // rejections (ERROR) and temporary rejections (TRY_AGAIN_LATER) fail before any
 // confirmation polling; PENDING/DUPLICATE with a valid hash use the existing
 // confirmation path; any other response fails closed.
-async function submitAndConfirm(
+async function submitAndConfirmWithHash(
   server: rpc.Server,
   prepared: Transaction,
   phase: string,
   rpcUrl: string,
   signal?: AbortSignal,
-): Promise<rpc.Api.GetSuccessfulTransactionResponse> {
+): Promise<{
+  confirmed: rpc.Api.GetSuccessfulTransactionResponse;
+  txHash: string;
+}> {
   if (signal?.aborted) {
     throw signal.reason || new Error(`${phase} cancelled`);
   }
@@ -500,6 +511,23 @@ async function submitAndConfirm(
       `${phase} transaction ${submission.hash} did not succeed (status=${confirmed.status})`,
     );
   }
+  return { confirmed, txHash: submission.hash };
+}
+
+async function submitAndConfirm(
+  server: rpc.Server,
+  prepared: Transaction,
+  phase: string,
+  rpcUrl: string,
+  signal?: AbortSignal,
+): Promise<rpc.Api.GetSuccessfulTransactionResponse> {
+  const { confirmed } = await submitAndConfirmWithHash(
+    server,
+    prepared,
+    phase,
+    rpcUrl,
+    signal,
+  );
   return confirmed;
 }
 
@@ -751,6 +779,8 @@ export interface EnsureContractDeployedOptions {
   minTtlLedgers?: number;
   /** Network passphrase used for transaction construction and deployer locking. */
   networkPassphrase?: string;
+  /** Refuse reusing an already-deployed instance (required when setup invocations will run). */
+  requireFreshDeployment?: boolean;
 }
 
 export async function ensureContractDeployed(
@@ -768,6 +798,11 @@ export async function ensureContractDeployed(
   return await withDeployerLock(network, deployer.publicKey(), async () => {
     const probe = await probeContractInstance(server, options.contractId);
     if (probe.deployed) {
+      if (options.requireFreshDeployment) {
+        throw new Error(
+          `Contract ${options.contractId} is already deployed on the network; refusing to run setup invocations against pre-existing state`,
+        );
+      }
       assertReusableTtl({
         label: "instance",
         contractId: options.contractId,
@@ -868,6 +903,185 @@ export async function ensureContractDeployed(
       return_xdr: result.toXDR("base64"),
     };
   });
+}
+
+/** Confirmed receipt for one committed setup invocation.
+ *  Setup transaction costs are never included in benchmark metrics.
+ */
+export interface SetupInvocationReceipt {
+  step: number;
+  id?: string;
+  function_name: string;
+  tx_hash: string;
+  ledger?: number;
+  return_xdr?: string;
+}
+
+/** Validate that a prepared setup transaction only requires deployer
+ *  source-account authorization (no external/non-source-account signers).
+ */
+function assertSupportedSetupAuthorization(
+  prepared: Transaction,
+  phase: string,
+): void {
+  const operations = (prepared as { operations?: unknown }).operations;
+  if (!Array.isArray(operations)) return;
+  for (const op of operations) {
+    if (
+      !op ||
+      typeof op !== "object" ||
+      (op as { type?: unknown }).type !== "invokeHostFunction"
+    ) {
+      continue;
+    }
+    const authEntries = (op as { auth?: unknown }).auth;
+    if (!Array.isArray(authEntries)) continue;
+    for (const entry of authEntries) {
+      const credSwitch =
+        typeof (entry as { credentials?: unknown })?.credentials === "function"
+          ? (
+              entry as {
+                credentials(): { switch(): { name: string } };
+              }
+            )
+              .credentials()
+              ?.switch?.()?.name
+          : undefined;
+      if (
+        credSwitch !== undefined &&
+        credSwitch !== "sorobanCredentialsSourceAccount"
+      ) {
+        throw new Error(
+          `${phase} requires unsupported authorization (${credSwitch}); standalone committed setup supports only deployer source-account authorization`,
+        );
+      }
+    }
+  }
+}
+
+/** Prepare, sign, submit, and confirm a contract's setup invocations in order.
+ *  Always uses the deployer account and requires confirmed SUCCESS inclusion
+ *  for each step before continuing. Setup consumption is excluded from
+ *  benchmark metrics.
+ */
+export async function commitSetupInvocations(options: {
+  server: rpc.Server;
+  deployer: Keypair;
+  contractId: string;
+  logicalId: string;
+  setupInvocations: SetupInvocationSpec[];
+  setupResults?: ReadonlyMap<string, SetupResult>;
+  rpcUrl: string;
+  signal?: AbortSignal;
+}): Promise<SetupInvocationReceipt[]> {
+  const {
+    server,
+    deployer,
+    contractId,
+    logicalId,
+    setupInvocations,
+    setupResults,
+    rpcUrl,
+    signal,
+  } = options;
+  const receipts: SetupInvocationReceipt[] = [];
+
+  for (let i = 0; i < setupInvocations.length; i++) {
+    const setupCall = setupInvocations[i];
+    const stepLabel = setupCall.id
+      ? `${setupCall.id} (${setupCall.function_name})`
+      : `#${i + 1} (${setupCall.function_name})`;
+    const phase = `setup invocation ${stepLabel} on ${logicalId}`;
+
+    if (signal?.aborted) {
+      throw signal.reason || new Error(`${phase} cancelled`);
+    }
+
+    const argsSc = setupCall.args.map((arg) => {
+      if (!("binding" in arg)) return toScVal(arg);
+      if (!setupResults) {
+        throw new Error(
+          `Setup bindings are not available in this setup path: ${setupCall.function_name} binds "${arg.binding.contract}"`,
+        );
+      }
+      return resolveBinding(
+        arg.binding,
+        arg.type.toLowerCase(),
+        setupResults.get(arg.binding.contract),
+      );
+    });
+
+    let account;
+    try {
+      account = await server.getAccount(deployer.publicKey());
+    } catch (err: any) {
+      if (signal?.aborted) {
+        throw signal.reason || new Error(`${phase} cancelled`);
+      }
+      throw new Error(
+        `${phase} failed to load deployer account at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}`,
+      );
+    }
+
+    const setupTx = new TransactionBuilder(account, {
+      fee: "1000000",
+      networkPassphrase: SUPPORTED_NETWORK_PASSPHRASE,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: contractId,
+          function: setupCall.function_name,
+          args: argsSc,
+        }),
+      )
+      .setTimeout(30)
+      .build();
+
+    let prepared: Transaction;
+    try {
+      prepared = await server.prepareTransaction(setupTx);
+    } catch (err: any) {
+      if (signal?.aborted) {
+        throw signal.reason || new Error(`${phase} cancelled`);
+      }
+      throw new Error(
+        `${phase} preparation failed at ${sanitizeEndpoint(rpcUrl)}: ${redactEndpointSecrets(String(err?.message ?? err), rpcUrl)}`,
+      );
+    }
+
+    assertSupportedSetupAuthorization(prepared, phase);
+    prepared.sign(deployer);
+
+    const { confirmed, txHash } = await submitAndConfirmWithHash(
+      server,
+      prepared,
+      phase,
+      rpcUrl,
+      signal,
+    );
+
+    const returnXdr =
+      confirmed.returnValue instanceof xdr.ScVal
+        ? confirmed.returnValue.toXDR("base64")
+        : undefined;
+    const ledger =
+      typeof confirmed.ledger === "number" ? confirmed.ledger : undefined;
+
+    console.log(
+      `Committed ${phase} (tx=${txHash}${ledger !== undefined ? `, ledger=${ledger}` : ""})`,
+    );
+
+    receipts.push({
+      step: i,
+      ...(setupCall.id !== undefined ? { id: setupCall.id } : {}),
+      function_name: setupCall.function_name,
+      tx_hash: txHash,
+      ...(ledger !== undefined ? { ledger } : {}),
+      ...(returnXdr !== undefined ? { return_xdr: returnXdr } : {}),
+    });
+  }
+
+  return receipts;
 }
 
 /** Build the simulated invocation transaction for one contract case.
@@ -1066,6 +1280,47 @@ export function validateWasmArtifact(
 }
 
 /**
+ * Preflight every literal (non-binding) setup invocation argument before any
+ * key creation, account funding, WASM upload, or deployment side effect.
+ */
+export function preflightSetupArguments(
+  fixtureId: string,
+  contracts: Array<{
+    wasm_path: string;
+    id?: string;
+    logical_id?: string;
+    setup_invocations?: SetupInvocationSpec[];
+  }>,
+): void {
+  const errors: string[] = [];
+
+  for (const contract of contracts) {
+    const contractLabel =
+      contract.logical_id ??
+      (contract.id ? `id:${contract.id}` : `wasm:${contract.wasm_path}`);
+    (contract.setup_invocations ?? []).forEach((setup, setupIndex) => {
+      const stepLabel = setup.id ? `id:${setup.id}` : `setup[${setupIndex}]`;
+      setup.args.forEach((arg, argIndex) => {
+        if ("binding" in arg) return;
+        try {
+          toScVal(arg);
+        } catch (err: any) {
+          errors.push(
+            `[${fixtureId} / ${contractLabel} / ${stepLabel} (${setup.function_name}) arg ${argIndex}] ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      });
+    });
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Preflight validation failed for configured setup invocations:\n${errors.join("\n")}`,
+    );
+  }
+}
+
+/**
  * Preflight all contract artifacts across the fixture before initiating network operations.
  */
 export function preflightContractArtifacts(
@@ -1161,6 +1416,9 @@ async function measureWithKeyFile(
     fixturesSpec.contracts,
   );
 
+  // Preflight literal setup invocation arguments before any key or network side effect.
+  preflightSetupArguments(fixturesSpec.fixture_id, fixturesSpec.contracts);
+
   // Preflight every configured contract WASM BEFORE funding or deploying anything (#119, #120)
   const resolvedWasmPaths = preflightContractArtifacts(
     fixturesDir,
@@ -1189,8 +1447,10 @@ async function measureWithKeyFile(
     }
   }
 
-  // Setup phase: commit every deployment in dependency order before any
-  // measured invocation. A failed prerequisite aborts all of its dependents.
+  // Setup phase: commit every deployment and its ordered setup invocations in
+  // dependency order before any measured invocation. Setup transaction
+  // consumption is never included in benchmark metrics. A failed prerequisite
+  // aborts all of its dependents.
   const setupResults = new Map<string, SetupResult>();
   const deployments = new Map<
     string,
@@ -1205,8 +1465,16 @@ async function measureWithKeyFile(
     console.log(`WASM: ${wasmPath}`);
     console.log(`WASM SHA256: ${wasmSha256}`);
 
-    // Deterministic salt based on WASM hash — same WASM always gets same contract ID
-    const salt = crypto.createHash("sha256").update(wasmHash).digest();
+    const setupInvocations = contractSpec.setup_invocations ?? [];
+    const hasSetupInvocations = setupInvocations.length > 0;
+
+    // Contracts with setup invocations deploy with a fresh random salt so each
+    // run commits setup against isolated state without colliding across
+    // revisions or partial prior runs. Stateless contracts retain the
+    // deterministic WASM-hash salt.
+    const salt = hasSetupInvocations
+      ? crypto.randomBytes(32)
+      : crypto.createHash("sha256").update(wasmHash).digest();
     const contractId = calculateContractId(deployer.publicKey(), salt);
 
     console.log(`Contract ID: ${contractId}`);
@@ -1225,7 +1493,20 @@ async function measureWithKeyFile(
         minTtlLedgers: opts.minTtlLedgers,
         networkPassphrase:
           opts.networkPassphrase ?? SUPPORTED_NETWORK_PASSPHRASE,
+        requireFreshDeployment: hasSetupInvocations,
       });
+      if (hasSetupInvocations) {
+        await commitSetupInvocations({
+          server,
+          deployer,
+          contractId,
+          logicalId: contractSpec.logical_id,
+          setupInvocations,
+          setupResults,
+          rpcUrl: effectiveRpcUrl,
+          signal: opts.signal,
+        });
+      }
     } catch (err) {
       const aborted = dependentsOf(contractSpec, setupOrder);
       if (opts.signal?.aborted || aborted.length === 0) throw err;

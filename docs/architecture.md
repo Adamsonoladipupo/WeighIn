@@ -80,13 +80,19 @@ an explicit error before any transaction is submitted. WeighIn does not extend
 TTLs, restore archived state or redeploy over an existing instance, so
 caller-owned state is never changed to hide an expiry. Extend the TTL
 externally or use a different deployer key.
-Upload and creation transactions are real submitted transactions. A generated
-private deployer key is shared across BASE/HEAD in a private temporary file.
+Upload, creation, and declared `setup_invocations` transactions are real
+submitted transactions signed by the deployer account. A generated private
+deployer key is shared across BASE/HEAD in a private temporary file.
 When multiple deployments or API calls in the same process share a deployer key, transaction
 sequence usage is serialized via same-process mutex locking keyed by network passphrase
 and deployer public account. Ownership is released on rejected or failed transactions so
 concurrent calls neither sign duplicate sequence numbers nor hang.
-Submission classifies the RPC `sendTransaction` status before polling: `ERROR`
+When a contract declares `setup_invocations`, it deploys with a fresh random salt
+(refusing pre-existing instances) and prepares, validates source-account-only
+authorization, signs, submits, and confirms each setup invocation in order
+before dependent contracts or measured simulations run; setup consumption is
+never included in benchmark metrics. Submission classifies the RPC
+`sendTransaction` status before polling: `ERROR`
 and `TRY_AGAIN_LATER` fail immediately (no confirmation poll, no dependent
 upload/create step, and no hidden resubmission); `PENDING` or `DUPLICATE` with a
 valid hash use the existing confirmation path and must still confirm `SUCCESS`;

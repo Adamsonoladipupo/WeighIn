@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "purpose": "verifiable WeighIn package build provenance",
-  "source_revision": "7aa4b15a7ed06ce6f496d6b9bbf888b8c1320807",
+  "source_revision": "e8d631a0723a4f56c8026085730167f3a8287860",
   "tools": {
-    "node": "v24.13.1",
-    "npm": "11.8.0"
+    "node": "v22.22.2",
+    "npm": "10.9.7"
   },
   "inputs": [
     {
@@ -17,7 +17,7 @@
     },
     {
       "path": "bundled/index.js",
-      "sha256": "50abc6a30c0ebd0cffe1aaa49ac2508d1ba66029ee9a36b924805a1d304c63d8"
+      "sha256": "d56fc4d960e59a549538374799c458703a14015bf8d07d12b4819ffc5f297c75"
     },
     {
       "path": "native/simulation/Cargo.lock",
@@ -65,7 +65,7 @@
     },
     {
       "path": "src/cli.ts",
-      "sha256": "b5037db124c2e990938050b0d9dd4db164035eb19902d6e4e84cd2a23fa76c6a"
+      "sha256": "04cef0a39b88cf7b75fb02872cb3bf9cff3876e2238d03f8cbe80c436823a1a5"
     },
     {
       "path": "src/comment-action.ts",
@@ -77,7 +77,7 @@
     },
     {
       "path": "src/config.ts",
-      "sha256": "401adc74896937c333abe4cbba30c6f0a41bb265994459870fd52f362cc65592"
+      "sha256": "059168407588e5e64db9cc6d24379411487452f5a26fdaff3dfc96c2790cdc3e"
     },
     {
       "path": "src/dependency-inventory.ts",
@@ -93,7 +93,7 @@
     },
     {
       "path": "src/diff.ts",
-      "sha256": "d5343442dbaaa1d25797049385a9aa91483c09c84105bfd7ec05c095de65dc5f"
+      "sha256": "822a622bc24bdd7174a67abba915ee002be3d4ab5e897e3eef2735c723b2f885"
     },
     {
       "path": "src/endpoint.ts",
@@ -105,11 +105,11 @@
     },
     {
       "path": "src/identity.ts",
-      "sha256": "987c2136e2a777328bf8383b2d321572230f88c61ed27d2c2ae88a60925e5f7d"
+      "sha256": "29dc21ed5eca66bf6643d9edf94c826cf395b031ebc456b7b37355e00bdc9c2f"
     },
     {
       "path": "src/measurement.ts",
-      "sha256": "6bd24a21c2920e9eb148e147449a6b986c30b55f0552545c495240f5124d2a39"
+      "sha256": "c93350742f38975662e780e7effe66a0bcc4f3dafc7ca48048f3fb63885078c4"
     },
     {
       "path": "src/network.ts",
@@ -149,7 +149,7 @@
     },
     {
       "path": "src/setup-plan.ts",
-      "sha256": "6f1926d555b4dda124f833fced2f9adac965aeb6edc0e91dabcd71ed92c24f47"
+      "sha256": "12180649a6598d2590f23d091fdc2087b46312227c4adf3ea1120a5d5956f6c3"
     },
     {
       "path": "src/simulation.ts",

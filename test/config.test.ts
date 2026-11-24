@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { loadConfig, validateConfig } from "../src/threshold";
+import {
+  loadConfig,
+  validateConfig,
+  enforceThresholds,
+} from "../src/threshold";
+import { diffBenchmarks } from "../src/diff";
 import {
   WeighinConfigSchema,
   RuleValueSchema,
@@ -86,25 +91,36 @@ describe("loadConfig (TOML parsing & Zod Validation)", () => {
     expect(config?.thresholds?.global?.fail_on_any_regression).toBe(true);
   });
 
-  it("parses a full valid weighin.toml with dynamic function names", () => {
+  it("parses TOML comments and preserves # in quoted function names", () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(`
-      [thresholds.global]
-      fail_on_any_regression = false
-      max_allowed_cpu_increase_pct = 5
+      # Global benchmark policy
+      [thresholds.global] # Global threshold table
+      fail_on_any_regression = false # Keep report-only behavior globally
 
-      [thresholds.functions.hello_world]
+      # A hash character is part of this quoted function name.
+      [thresholds.functions."swap#v2"] # Function-specific threshold
+      cpu_instructions = "strict_zero_tolerance" # Reject every CPU increase
       memory_bytes = "ignore"
-      cpu_instructions = "strict_zero_tolerance"
-      
-      [thresholds.functions.another_fn]
+
+      # A normal function name must continue to work.
+      [thresholds.functions.transfer]
       events_count = "allow_10_percent_increase"
     `);
+
     const config = loadConfig("weighin.toml");
-    expect(config?.thresholds?.functions?.hello_world?.memory_bytes).toBe(
+
+    expect(config?.thresholds?.global?.fail_on_any_regression).toBe(false);
+
+    expect(config?.thresholds?.functions?.["swap#v2"]?.cpu_instructions).toBe(
+      "strict_zero_tolerance",
+    );
+
+    expect(config?.thresholds?.functions?.["swap#v2"]?.memory_bytes).toBe(
       "ignore",
     );
-    expect(config?.thresholds?.functions?.another_fn?.events_count).toBe(
+
+    expect(config?.thresholds?.functions?.transfer?.events_count).toBe(
       "allow_10_percent_increase",
     );
   });
@@ -160,6 +176,38 @@ describe("loadConfig (TOML parsing & Zod Validation)", () => {
       50000000,
     );
   });
+
+  it.each([
+    [
+      "a negative percentage string",
+      `[thresholds.functions.hello]\ncpu_instructions = "-5%"`,
+      "thresholds.functions.hello.cpu_instructions: Unsupported threshold rule",
+    ],
+    [
+      "a negative numeric percentage cap",
+      `[thresholds.functions.hello]\ncpu_instructions = -5`,
+      "thresholds.functions.hello.cpu_instructions: Number must be >= 0",
+    ],
+    [
+      "a negative named percentage rule",
+      `[thresholds.functions.hello]\ncpu_instructions = "allow_-5_percent_increase"`,
+      "thresholds.functions.hello.cpu_instructions: Unsupported threshold rule",
+    ],
+    [
+      "a negative global percentage cap",
+      `[thresholds.global]\nmax_allowed_cpu_increase_pct = -5`,
+      "thresholds.global.max_allowed_cpu_increase_pct: Number must be >= 0",
+    ],
+  ])(
+    "rejects %s with a descriptive validation error",
+    (_label, toml, issue) => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(toml);
+      expect(() => loadConfig("weighin.toml")).toThrowError(
+        `Invalid WeighIn configuration in weighin.toml:\n- ${issue}`,
+      );
+    },
+  );
 
   it("throws on negative limit values", () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -467,6 +515,70 @@ describe("FixturesSpecSchema", () => {
           {
             wasm_path: "test.wasm",
             invocations: [{ id: "  ", function_name: "test_fn", args: [] }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts valid setup_invocations and rejects malformed setup_invocations", () => {
+    const valid = {
+      contracts: [
+        {
+          id: "initialized",
+          wasm_path: "test.wasm",
+          depends_on: ["dep"],
+          setup_invocations: [
+            {
+              id: "init",
+              function_name: "initialize",
+              args: [
+                { type: "U32", value: 30 },
+                { type: "Address", binding: { contract: "dep" } },
+              ],
+            },
+          ],
+          invocations: [{ function_name: "read_value", args: [] }],
+        },
+        {
+          id: "dep",
+          wasm_path: "dep.wasm",
+          invocations: [{ function_name: "ping", args: [] }],
+        },
+      ],
+    };
+    const parsed = FixturesSpecSchema.safeParse(valid);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.contracts[0].setup_invocations?.[0].args[0].type).toBe(
+        "u32",
+      );
+      expect(parsed.data.contracts[0].setup_invocations?.[0].args[1].type).toBe(
+        "address",
+      );
+    }
+
+    expect(
+      FixturesSpecSchema.safeParse({
+        contracts: [
+          {
+            wasm_path: "test.wasm",
+            setup_invocations: [
+              { function_name: "init", args: [], extra: true },
+            ],
+            invocations: [{ function_name: "read", args: [] }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      FixturesSpecSchema.safeParse({
+        contracts: [
+          {
+            wasm_path: "test.wasm",
+            setup_invocations: [{ id: "  ", function_name: "init", args: [] }],
+            invocations: [{ function_name: "read", args: [] }],
           },
         ],
       }).success,
