@@ -43650,6 +43650,17 @@ function formatZodIssueMessage(issue2) {
   if (issue2.code === "too_small" && issue2.origin === "number" && issue2.minimum === 0) {
     return "Number must be >= 0";
   }
+  if (issue2.code === "invalid_union" && Array.isArray(issue2.errors)) {
+    const flatIssues = issue2.errors.flatMap((branch) => branch);
+    const custom2 = flatIssues.find((i) => i.code === "custom");
+    if (custom2)
+      return formatZodIssueMessage(custom2);
+    const tooSmall = flatIssues.find(
+      (i) => i.code === "too_small" && "origin" in i && i.origin === "number"
+    );
+    if (tooSmall)
+      return formatZodIssueMessage(tooSmall);
+  }
   return issue2.message;
 }
 var TopLevelInvocationArgSchema = external_exports.unknown().transform((val, ctx) => {

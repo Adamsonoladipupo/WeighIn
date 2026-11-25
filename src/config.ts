@@ -308,6 +308,21 @@ function formatZodIssueMessage(issue: z.ZodError["issues"][number]): string {
   ) {
     return "Number must be >= 0";
   }
+  if (issue.code === "invalid_union" && Array.isArray(issue.errors)) {
+    // Pick the most informative sub-error from each union branch.
+    // Prefer branches with specific custom messages over generic type errors.
+    const flatIssues = issue.errors.flatMap((branch) => branch);
+    // A custom message from a refine() is preferred over a generic type mismatch.
+    const custom = flatIssues.find((i) => i.code === "custom");
+    if (custom)
+      return formatZodIssueMessage(custom as z.ZodError["issues"][number]);
+    // A too_small constraint on number is more informative than "Invalid input".
+    const tooSmall = flatIssues.find(
+      (i) => i.code === "too_small" && "origin" in i && i.origin === "number",
+    );
+    if (tooSmall)
+      return formatZodIssueMessage(tooSmall as z.ZodError["issues"][number]);
+  }
   return issue.message;
 }
 

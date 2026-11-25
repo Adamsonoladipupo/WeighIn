@@ -13,7 +13,7 @@ the declared inputs, resolves the existing GitHub workspace/cwd, and loads HEAD'
 policy from the configured TOML path (default `weighin.toml`). Missing optional
 policy means report-only. `loadConfig` validates known configuration keys/types;
 `validateConfig` rejects malformed/nonfinite/negative rules before measuring.
-Fixtures are parsed by `src/identity.ts::parseFixtures`, not, the older generic
+Fixtures are parsed by `src/identity.ts::parseFixtures`, not the older generic
 fixture schema exported from `src/config.ts`.
 
 The Action validates `base-ref` as a branch, tag, or commit SHA before network
