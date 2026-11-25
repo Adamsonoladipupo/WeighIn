@@ -1,31 +1,34 @@
 ---
 name: Bug report
-about: Create a report to help us improve WeighIn
-title: ''
+about: Report WeighIn calculation discrepancies or CLI execution bugs
+ title: ''
 labels: bug
 assignees: ''
 
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## Bug summary
+Describe the calculation discrepancy or CLI execution bug. Include the relevant command, configuration, or fixture details.
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Trigger action with '...' inputs
-2. Configured fixtures as '...'
-3. See error in action logs...
+## Reproduction steps
+Provide the smallest set of steps or inputs that reliably reproduces the issue:
+1. Run `...` with `...` inputs/configuration.
+2. Observe `...`.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## Expected behavior
+What did you expect the calculation or command to do?
 
-**Logs**
-If applicable, paste the GitHub Action log output here.
+## Actual behavior
+What happened instead? For calculation discrepancies, include the input values and expected versus actual results.
 
-**Desktop/Environment:**
- - OS: [e.g. ubuntu-latest]
- - Action Version: [e.g. main, v1]
- - Soroban/Stellar RPC version: [e.g. quickstart:latest]
+## Environment
+- Node.js version (`node --version`):
+- Soroban SDK version:
+- WeighIn version/commit:
+- OS and version:
 
-**Additional context**
-Add any other context about the problem here.
+## Logs or output
+Paste relevant CLI output or logs here. Remove secrets and private keys before posting.
+
+## Additional context
+Add any other context, screenshots, or sample data that may help diagnose the issue.
