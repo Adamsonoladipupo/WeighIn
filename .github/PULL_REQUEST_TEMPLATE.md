@@ -12,5 +12,8 @@
 
 ## Checklist
 - [ ] I have read the `CONTRIBUTING.md` document.
-- [ ] I have run `npm run build` and `npm run bundle` and committed the updated `bundled/index.js` if TypeScript code was changed.
+- [ ] Built TypeScript (`npm run build`).
+- [ ] Bundled Action (`npm run bundle`) and committed the updated `bundled/index.js` and `bundled/comment-action.js` after runtime or dependency changes.
+- [ ] Tests pass (`npm test`).
+- [ ] Documentation updated if needed.
 - [ ] I have verified my changes against the dummy contract in `contract/`.
