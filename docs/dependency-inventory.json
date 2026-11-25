@@ -17466,7 +17466,6 @@
         "pkg:npm/prettier@3.9.6",
         "pkg:npm/toml@5.0.1",
         "pkg:npm/typescript@5.9.3",
-        "pkg:npm/vite@7.3.7",
         "pkg:npm/vitest@4.1.12",
         "pkg:npm/yaml@2.9.1",
         "pkg:npm/zod@4.6.7"

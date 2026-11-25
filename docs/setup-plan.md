@@ -22,23 +22,84 @@ order, so a fixture without dependencies deploys exactly as before.
 
 ## Executing the plan
 
-`runMeasurement` now has two phases for each revision:
+`runMeasurement` has two phases for each revision:
 
 1. **Setup.** Every contract is uploaded and created once, in plan order, and
    each create transaction must be confirmed `SUCCESS` and return the expected
    deterministic contract address. An unexpected or missing address stops
    setup with a diagnostic containing the expected address and any observed
    address. The verified create return value is captured as raw ScVal XDR.
-   When the instance already exists at the deterministic address, setup uses
-   the verified instance address.
-2. **Measurement.** Only after the whole setup has committed are invocations
-   simulated, in fixture declaration order. Setup transactions are never
-   measured.
+   When a contract has no `setup_invocations` and the instance already exists
+   at the deterministic address, setup uses the verified instance address.
+   When a contract declares `setup_invocations`, it deploys with a fresh random
+   salt (refusing any pre-existing instance) and executes each declared setup
+   invocation in order: building the call with literal or dependency-bound
+   arguments, preparing via RPC, verifying only deployer source-account
+   authorization is required, signing with the deployer keypair, submitting,
+   and confirming `SUCCESS` inclusion before continuing to the next setup call
+   or any dependent contract.
+2. **Measurement.** Only after every deployment and every declared setup
+   invocation across the whole fixture has committed are benchmark
+   `invocations` simulated, in fixture declaration order. Setup transactions
+   (upload, create, and `setup_invocations`) are never measured and their
+   consumption is excluded from benchmark metrics.
 
-If a prerequisite fails, the run stops before any measured invocation and the
-error names every transitive dependent that was aborted, for example
+If a prerequisite deployment or setup invocation fails, the run stops before
+any remaining setup step or measured invocation and the error names every
+transitive dependent that was aborted, for example
 `Setup of id:callee failed; aborted dependents: id:caller`. Cancellation errors
 are rethrown unchanged.
+
+## Committed setup invocations
+
+A contract can declare ordered `setup_invocations` to initialize on-chain state
+before measured benchmark `invocations` run:
+
+```json
+{
+  "id": "initialized-contract",
+  "wasm_path": "target/wasm32v1-none/release/contract_test.wasm",
+  "setup_invocations": [
+    { "id": "seed", "function_name": "initialize", "args": [{ "type": "u32", "value": 30 }] },
+    { "id": "increment", "function_name": "add", "args": [{ "type": "u32", "value": 12 }] }
+  ],
+  "invocations": [
+    { "id": "read-committed", "function_name": "read_value", "args": [] }
+  ]
+}
+```
+
+Key guarantees and boundaries:
+
+- **Preflight before side effects:** Unknown keys, blank IDs, duplicate setup
+  IDs on one contract, bindings to undeclared dependencies, and invalid literal
+  argument values fail before any key file creation, funding, or RPC call.
+- **Ordered inclusion gate:** Each setup call fetches a fresh deployer account
+  sequence, prepares via RPC, signs with the deployer keypair, submits, and
+  waits for confirmed `SUCCESS` inclusion before the next step begins. Any
+  preparation error, `ERROR`/`TRY_AGAIN_LATER`/invalid send status, `FAILED`
+  transaction, or confirmation timeout halts the run before measurement.
+- **Standalone authorization boundary:** Setup calls run only in the supported
+  standalone environment with deployer source-account authorization
+  (`sorobanCredentialsSourceAccount` or no auth). A prepared setup call
+  requiring non-source-account authorization (such as
+  `sorobanCredentialsAddress` for an external signer) fails closed before
+  signing or submission. Signed production authorization is not claimed.
+- **Metric and identity isolation:** Setup calls are never recorded in
+  `benchmarks`, never alter benchmark `case_id`s, and never add setup CPU,
+  memory, write entries, write bytes, or fees to benchmark metrics. Because
+  contracts with `setup_invocations` deploy with a fresh salt per run, BASE and
+  HEAD do not collide or double-initialize on a shared standalone network while
+  still pairing by logical identity.
+- **Source-built initialized contract:** `tests/fixtures/setup-invocations/`
+  contains the contract source (`src/lib.rs`), locked Cargo manifest, and
+  `fixtures.json`; the test scripts build its WASM into the ignored `target/`
+  directory. The contract has no constructor, so benchmark reads (`read_value`,
+  `check_value(42)`) fail unless `initialize(30)` and `add(12)` committed in
+  order. `tests/setup-invocations.test.cjs` verifies success, ordering,
+  signing, metric exclusion, cross-revision pairing, and invalid/failure cases;
+  `tests/experiments/verify-setup-invocations.cjs` provides the explicit live
+  standalone-network proof.
 
 ## Typed bindings
 

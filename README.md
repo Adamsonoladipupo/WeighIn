@@ -1,5 +1,9 @@
 # WeighIn
 
+[![CI](https://github.com/WeighInNG/WeighIn/actions/workflows/weighin.yml/badge.svg)](https://github.com/WeighInNG/WeighIn/actions/workflows/weighin.yml)
+[![npm version](https://img.shields.io/npm/v/weighin.svg)](https://www.npmjs.com/package/weighin)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+
 WeighIn benchmarks configured Soroban contract functions in BASE and HEAD,
 compares their resource usage, and fails a GitHub Action when a configured policy
 is violated. It is for contract maintainers who want resource regressions visible
@@ -88,6 +92,8 @@ contract interface. The path is relative to the fixture file. The default
 builder finds the owning Cargo manifest; merely renaming an unrelated artifact
 is not supported.
 See the [fixture schema and valid/invalid editor examples](docs/fixture-schema.md).
+The [simulation fixtures](examples/README.md) cover multi-entry storage reads
+and nested authorization.
 
 A contract that calls another deployed contract declares it in `depends_on`
 (explicit contract ids) and takes its address from the committed setup instead
@@ -117,7 +123,12 @@ of a hardcoded value:
 ```
 
 Every revision deploys each contract once, dependencies first, and commits the
-whole setup before any measured invocation. Each new deployment must return
+whole setup — including any ordered `setup_invocations` declared on a contract
+— before any measured invocation. Contracts with `setup_invocations` deploy to
+a fresh instance per run, prepare/sign/submit each setup call with the deployer
+account (standalone source-account authorization only), confirm `SUCCESS`
+inclusion in order, and exclude all setup consumption from benchmark metrics.
+Each new deployment must return
 the expected deterministic contract address in its successful create receipt.
 If validation fails, the error reports the expected address and the observed
 address, when available. Unknown, duplicate, self or cyclic
@@ -204,7 +215,7 @@ All supported inputs are declared in [action.yml](action.yml):
 | `config-path` | HEAD policy file; default `weighin.toml`. A missing file means report-only |
 | `trusted-policy-ref` | Optional ref fetched from `origin` for an immutable policy source; must be paired with `trusted-policy-path` |
 | `trusted-policy-path` | Repository path read from the resolved trusted policy commit; HEAD cannot replace it |
-| `rpc-url` | Compatible standalone RPC; default `http://localhost:8000/rpc` |
+| `rpc-url` | Compatible standalone RPC; default `http://localhost:8000/rpc`. See [RPC authentication](docs/RPC-AUTH.md) and [rate limits](docs/RPC-RATE-LIMITS.md). |
 | `base-ref` | Baseline branch, tag, or commit SHA; PR base branch, otherwise `main`, if omitted. Invalid refs are rejected before builds or deployment. |
 | `rust-toolchain` | Contract-build Rustup override; does not change pinned native-helper toolchain |
 | `build-command` | Custom shell build command in each revision; replaces default build guarantees |

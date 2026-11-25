@@ -1,0 +1,47 @@
+{
+  "id": "auth-tree",
+  "contracts": [
+    {
+      "id": "approval",
+      "wasm_path": "target/fixture-auth/target/wasm32v1-none/release/contract_test.wasm",
+      "depends_on": ["verifier"],
+      "invocations": [
+        {
+          "id": "buyer-and-seller",
+          "function_name": "approve",
+          "args": [
+            {
+              "type": "address",
+              "binding": {
+                "contract": "verifier"
+              }
+            },
+            {
+              "type": "address",
+              "value": "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ"
+            },
+            {
+              "type": "address",
+              "value": "GAORIEXSXJSXU56XLYKVKIDKXDEIP27EJWKN6IQXAWFL5ZXQAX7Z5PID"
+            },
+            {
+              "type": "u64",
+              "value": "42"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "verifier",
+      "wasm_path": "target/fixture-verifier/target/wasm32v1-none/release/contract_test.wasm",
+      "invocations": [
+        {
+          "id": "ready",
+          "function_name": "status",
+          "args": []
+        }
+      ]
+    }
+  ]
+}

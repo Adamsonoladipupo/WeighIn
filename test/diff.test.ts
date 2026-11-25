@@ -498,7 +498,6 @@ describe("diffBenchmarks", () => {
       expect(commentPassed).not.toContain("### ❌ Violations");
     });
   });
-
   it("formats byte counts correctly", () => {
     expect(formatByteCount(500)).toBe("500 B");
     expect(formatByteCount(2048)).toBe("2.00 KB");

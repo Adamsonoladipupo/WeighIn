@@ -1,0 +1,48 @@
+{
+  "id": "committed-setup-suite",
+  "contracts": [
+    {
+      "id": "initialized-contract",
+      "wasm_path": "target/wasm32v1-none/release/contract_test.wasm",
+      "setup_invocations": [
+        {
+          "id": "seed",
+          "function_name": "initialize",
+          "args": [
+            {
+              "type": "u32",
+              "value": 30
+            }
+          ]
+        },
+        {
+          "id": "increment",
+          "function_name": "add",
+          "args": [
+            {
+              "type": "u32",
+              "value": 12
+            }
+          ]
+        }
+      ],
+      "invocations": [
+        {
+          "id": "read-committed",
+          "function_name": "read_value",
+          "args": []
+        },
+        {
+          "id": "verify-committed",
+          "function_name": "check_value",
+          "args": [
+            {
+              "type": "u32",
+              "value": 42
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish tagged release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and bundle action
+        run: npm run bundle
+
+      - name: Extract release notes from git history
+        id: notes
+        shell: bash
+        run: |
+          previous_tag="$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)"
+          if [ -n "$previous_tag" ]; then
+            range="${previous_tag}..${GITHUB_SHA}"
+          else
+            range="${GITHUB_SHA}"
+          fi
+          {
+            echo "## Changes"
+            git log --pretty=format:'- %s (%h)' "$range"
+            echo
+          } > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: ${{ runner.temp }}/release-notes.md
+          files: |
+            bundled/index.js
+            bundled/comment-action.js

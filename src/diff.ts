@@ -768,7 +768,6 @@ export function getMetricBadge(
   }
   return "🔴";
 }
-
 export function formatByteCount(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) {
     throw new RangeError("Byte count must be a finite non-negative number");

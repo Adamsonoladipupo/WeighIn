@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "purpose": "verifiable WeighIn package build provenance",
-  "source_revision": "e8d631a0723a4f56c8026085730167f3a8287860",
+  "source_revision": "3c7ced2fbfbc58a8d64f22efb36c27c378cbb67b",
   "tools": {
     "node": "v22.22.2",
     "npm": "10.9.7"
@@ -33,11 +33,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "8ff1ca8ea93b37dc55f93b33670eb1397421047ab38eacaae93b1b2b721cb6e8"
+      "sha256": "2706cffac495708f0ca4b5bb87ceb6195459636b21b91b3d0424205a02e55a52"
     },
     {
       "path": "package.json",
-      "sha256": "0e9477df4485369e2677779435e38d04e93e4a93b80f192f339943502ab7b2de"
+      "sha256": "4485c1b02965c7a2abf840a15ab719ca927aad8d5bb2ef0a1f10672b82068043"
     },
     {
       "path": "src/account.ts",
@@ -93,7 +93,7 @@
     },
     {
       "path": "src/diff.ts",
-      "sha256": "822a622bc24bdd7174a67abba915ee002be3d4ab5e897e3eef2735c723b2f885"
+      "sha256": "0483c2d00797ccc0eebe0b138c9b778215db0703fc77046d857dad8570b81cf3"
     },
     {
       "path": "src/endpoint.ts",

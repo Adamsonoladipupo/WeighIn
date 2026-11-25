@@ -1,0 +1,31 @@
+
+# WeighIn example policy for a DeFi swap operation.
+#
+# This is an application-level budget example, not a universal Stellar
+# protocol configuration. Replace the memory ceiling with a value justified
+# by your own baseline measurements and supported network configuration.
+#
+# The rules below apply to every matched benchmark whose function_name is
+# "swap". WeighIn currently scopes function rules by function name; it does
+# not provide contract-specific or case-specific function threshold tables.
+
+[thresholds.functions.swap]
+
+# A swap must not increase the number of ledger write footprint entries.
+# Any positive increase from BASE to HEAD violates this rule.
+ledger_write_entries = "strict_zero_tolerance"
+
+# Permit CPU instruction consumption to increase by at most 2%.
+# Equality at the 2% boundary passes; anything greater fails.
+cpu_instructions = "allow_2_percent_increase"
+
+[limits.functions.swap]
+
+# Absolute HEAD memory ceiling for the swap function.
+#
+# 32,000,000 is an example project budget only. It is not a universal
+# network limit or a fee estimate. Confirm the value against:
+#   1. Your measured BASE/HEAD benchmark results.
+#   2. The captured network's txMemoryLimit.
+#   3. The safety margin required for your protocol's worst-case path.
+memory_bytes = 32000000
