@@ -370,6 +370,276 @@ describe("renderComment", () => {
     expect(comment).toContain("</details>");
     expect(comment).toContain("#### `function-11 / id:case-11`");
   });
+
+  it("escapes backticks, pipes, newlines, HTML/details delimiters, and report markers across all contexts without mutating inputs", () => {
+    const adversarialLabel =
+      "foo`bar``baz|col\n## Spoofed Heading\r\n</details><!-- weighin-report --><details><summary>Evil</summary>";
+    const adversarialText =
+      "reason with `backticks` | pipe\n### Fake Section\n</details><!-- weighin-report -->";
+
+    const diff: DiffResult = {
+      contracts: [
+        {
+          fixture_id: `path:${adversarialLabel}`,
+          logical_id: `id:${adversarialLabel}`,
+          contract_id: "CADVERSARIAL",
+          base_contract_id: `base-${adversarialLabel}`,
+          head_contract_id: `head-${adversarialLabel}`,
+          base_commit: "abc",
+          head_commit: "def",
+          hasRegression: true,
+          newFunctions: [],
+          removedFunctions: [],
+          newBenchmarks: [
+            {
+              function_name: `new_${adversarialLabel}`,
+              case_id: "`edge`|case\n</details>",
+            },
+          ],
+          removedBenchmarks: [
+            {
+              function_name: `rem_${adversarialLabel}`,
+              case_id: "``double``|case\n<!-- weighin-report -->",
+            },
+          ],
+          functions: [
+            {
+              function_name: `fn_${adversarialLabel}`,
+              case_id: "`case`|arg\n### Injected",
+              hasRegression: true,
+              base_provenance: {
+                source: `src-${adversarialText}`,
+                source_version: "1.0`</details>",
+                protocol: 28,
+                helper_sha256: `helper-${adversarialLabel}`,
+                network_id: "net",
+                ledger: 100,
+                header_sha256: "b".repeat(64),
+                snapshot_sha256: "c".repeat(64),
+                config_sha256: `cfg-${adversarialLabel}`,
+                compute_config_sha256: `ccfg-${adversarialLabel}`,
+                input_sha256: "f".repeat(64),
+                seed: [],
+                auth_mode: "recording",
+                host_features: [],
+                resource_limits_sha256: `rl-${adversarialLabel}`,
+              },
+              head_provenance: {
+                source: `src-${adversarialText}`,
+                source_version: "1.1`<!-- weighin-report -->",
+                protocol: 28,
+                helper_sha256: `head-helper-${adversarialLabel}`,
+                network_id: "net",
+                ledger: 101,
+                header_sha256: "b".repeat(64),
+                snapshot_sha256: "c".repeat(64),
+                config_sha256: `head-cfg-${adversarialLabel}`,
+                compute_config_sha256: `head-ccfg-${adversarialLabel}`,
+                input_sha256: "f".repeat(64),
+                seed: [],
+                auth_mode: "recording",
+                host_features: [],
+                resource_limits_sha256: `head-rl-${adversarialLabel}`,
+              },
+              metrics: [
+                {
+                  key: "cpu_instructions",
+                  base: { consumed: 100, limit: 1000 },
+                  head: {
+                    consumed: 120,
+                    limit: 1000,
+                    source: `metric-src-${adversarialLabel}`,
+                    limit_source: `limit-src-${adversarialLabel}`,
+                  },
+                  delta: 20,
+                  pct: 20,
+                  regression: true,
+                },
+                {
+                  key: "memory_bytes",
+                  base: { consumed: null, limit: null, reason: adversarialText },
+                  head: {
+                    consumed: null,
+                    limit: null,
+                    reason: adversarialText,
+                    limit_reason: adversarialText,
+                  },
+                  availability: "unavailable",
+                  reason: adversarialText,
+                  delta: null,
+                  pct: null,
+                  regression: false,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      aggregates: [
+        {
+          id: "agg-1",
+          name: `agg-${adversarialLabel}`,
+          description: adversarialText,
+          member_count: 1,
+          hasRegression: true,
+          provenance: {
+            source: `agg-src-${adversarialText}`,
+            protocol_version: 28,
+            network_passphrase: `pass-${adversarialLabel}`,
+          },
+          metrics: [
+            {
+              key: "cpu_instructions",
+              base_consumed: 100,
+              head_consumed: 120,
+              delta: 20,
+              pct: 20,
+              regression: true,
+              availability: "available",
+              description: `desc|pipe\n</details><!-- weighin-report -->`,
+            },
+            {
+              key: "memory_bytes",
+              base_consumed: null,
+              head_consumed: null,
+              delta: null,
+              pct: null,
+              regression: false,
+              availability: "unavailable",
+              reason: adversarialText,
+              description: "sum",
+            },
+          ],
+          breakdown: {
+            cpu_instructions: [
+              {
+                contract_id: "CADVERSARIAL",
+                logical_id: `member|${adversarialLabel}`,
+                function_name: `fn|${adversarialLabel}`,
+                case_id: `case|${adversarialLabel}`,
+                base_consumed: 100,
+                head_consumed: 120,
+              },
+            ],
+            memory_bytes: [
+              {
+                contract_id: "CADVERSARIAL",
+                logical_id: `member|${adversarialLabel}`,
+                function_name: `fn|${adversarialLabel}`,
+                case_id: `case|${adversarialLabel}`,
+                base_consumed: null,
+                head_consumed: null,
+              },
+            ],
+          },
+        },
+      ],
+      hasRegression: true,
+      newContracts: [`new-c-${adversarialLabel}`],
+      removedContracts: [`rem-c-${adversarialLabel}`],
+    };
+
+    const violations: Violation[] = [
+      {
+        contract_id: "CADVERSARIAL",
+        logical_id: `id:${adversarialLabel}`,
+        function_name: `fn_${adversarialLabel}`,
+        case_id: "`case`|arg\n### Injected",
+        metric: "cpu_instructions",
+        delta: 20,
+        pct: 20,
+        rule: "max_allowed_cpu_increase_pct",
+        message: adversarialText,
+      },
+      {
+        aggregate_id: `agg-${adversarialLabel}`,
+        contract_id: "",
+        function_name: "",
+        metric: "cpu_instructions",
+        delta: 20,
+        pct: 20,
+        rule: "max_allowed_cpu_increase_pct",
+        message: adversarialText,
+      },
+    ];
+
+    const policyOrigin = {
+      status: "active" as const,
+      report_only: false,
+      mode: "head" as const,
+      path: `weighin.toml|${adversarialLabel}`,
+      revision: `rev-${adversarialLabel}`,
+      content_sha256: `sha-${adversarialLabel}`,
+      rules: [
+        {
+          target: `target|${adversarialLabel}`,
+          metric: "cpu_instructions" as const,
+          rule: `rule|${adversarialLabel}`,
+          source: `function_override|${adversarialText}`,
+        },
+      ],
+    };
+
+    const diffSnapshot = JSON.stringify(diff);
+    const violationsSnapshot = JSON.stringify(violations);
+    const policySnapshot = JSON.stringify(policyOrigin);
+
+    const report = renderComment(
+      diff,
+      violations,
+      `base-${adversarialLabel}`,
+      "1234567890abcdef",
+      policyOrigin,
+    );
+
+    // Original inputs must not be mutated
+    expect(JSON.stringify(diff)).toBe(diffSnapshot);
+    expect(JSON.stringify(violations)).toBe(violationsSnapshot);
+    expect(JSON.stringify(policyOrigin)).toBe(policySnapshot);
+
+    // Exactly one renderer-owned report marker
+    expect(report.split(COMMENT_MARKER).length - 1).toBe(1);
+    expect(report.trimEnd().endsWith(COMMENT_MARKER)).toBe(true);
+
+    // Expected top-level heading and no spoofed headings at line starts
+    const lines = report.split("\n");
+    expect(lines[0]).toBe("## 🔴 WeighIn Benchmark Report");
+    expect(lines.filter((l) => /^##\s+Spoofed Heading/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /^###\s+Fake Section/.test(l))).toEqual([]);
+    expect(lines.filter((l) => /^###\s+Injected/.test(l))).toEqual([]);
+
+    // Renderer-owned <details> sections are balanced and not closed or spoofed by data
+    const openDetails = report.match(/<details>/g) ?? [];
+    const closeDetails = report.match(/<\/details>/g) ?? [];
+    // Expected: Effective Policy Rules, Member breakdown, Snapshot and metric provenance, Known measurement gaps
+    expect(openDetails.length).toBe(4);
+    expect(closeDetails.length).toBe(4);
+    expect(report).not.toContain("<details><summary>Evil</summary>");
+
+    // Numeric values and unavailable states remain intact
+    expect(report).toContain(
+      "| 🔴 | CPU Instructions | 100 | 120 | +20 | +20.0% | 1,000 |",
+    );
+    expect(report).toContain(
+      "| ⚪ | Memory Bytes | Unavailable | Unavailable | Unavailable | — | Unavailable |",
+    );
+
+    // Table rows keep exact column counts (unescaped pipes only)
+    const countUnescapedPipes = (row: string) =>
+      (row.match(/(?<!\\)\|/g) ?? []).length;
+
+    const policyRuleRow = lines.find((l) => l.includes("target\\|foo"));
+    expect(policyRuleRow).toBeDefined();
+    expect(countUnescapedPipes(policyRuleRow!)).toBe(5); // 4 columns => 5 unescaped pipes
+
+    const memberBreakdownRow = lines.find((l) => l.includes("member\\|foo"));
+    expect(memberBreakdownRow).toBeDefined();
+    expect(countUnescapedPipes(memberBreakdownRow!)).toBe(6); // 5 columns => 6 unescaped pipes
+
+    const aggMetricRow = lines.find((l) => l.includes("desc\\|pipe"));
+    expect(aggMetricRow).toBeDefined();
+    expect(countUnescapedPipes(aggMetricRow!)).toBe(8); // 7 columns => 8 unescaped pipes
+  });
 });
 
 describe("findReportComment unit tests", () => {
