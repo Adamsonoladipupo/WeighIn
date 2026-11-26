@@ -1622,7 +1622,12 @@ export {
   SingleRecordValidationResult,
   RecordValidationResult,
 } from "./record-schema";
-export { getFixturesJsonSchema, WEIGHIN_FIXTURES_JSON_SCHEMA } from "./config";
+export {
+  FixturesSpecSchema,
+  formatZodError,
+  getFixturesJsonSchema,
+  WEIGHIN_FIXTURES_JSON_SCHEMA,
+} from "./config";
 export type { SdkAssociation } from "./sdk-version";
 export {
   discoverSdkAssociations,
