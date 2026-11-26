@@ -11,6 +11,7 @@ const path = require("path");
 
 const SRC_DIR = path.resolve(__dirname, "..", "src");
 const LICENSES = [
+  /^\/\/ SPDX-License-Identifier: Apache-2\.0\r?$/m,
   // Apache-2.0 (project's LICENSE)
   /Copyright \(c\) \d{4} .*[\r\n]+[\s\S]*?Apache License[^\n]*Version 2\.0/,
   // MIT
@@ -57,10 +58,10 @@ function main() {
     process.exit(1);
   }
 
-  const ok = files.every(checkFile);
-  if (!ok) {
+  const missingHeaders = files.filter((file) => !checkFile(file));
+  if (missingHeaders.length) {
     console.error(
-      `\n${files.filter((f) => !checkFile(f)).length} file(s) missing a license header`,
+      `\n${missingHeaders.length} file(s) missing a license header`,
     );
     process.exit(1);
   }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import * as fs from "fs";
 import * as TOML from "toml";
 import { z } from "zod";

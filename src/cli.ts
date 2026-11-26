@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: Apache-2.0
+
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
@@ -38,6 +40,7 @@ export interface CliOptions {
 export type CliCommand =
   | { kind: "help" }
   | { kind: "version" }
+  | { kind: "validate"; fixturePath: string }
   | { kind: "measure"; options: CliOptions };
 
 const DEFAULT_FIXTURES_PATH = "weighin-fixtures.json";
@@ -51,6 +54,8 @@ export const HELP_TEXT = `${USAGE}
 Measure Soroban contract resource usage from an existing fixtures file.
 The command only measures: it does not build contracts, compare BASE/HEAD
 revisions, enforce thresholds or post comments.
+
+  weighin validate <fixtures.json>   Validate a fixtures file offline
 
 Positional arguments:
   fixtures.json         Fixtures file to measure (default: ${DEFAULT_FIXTURES_PATH})
@@ -80,9 +85,43 @@ function readPackageVersion(): string {
   }
   return metadata.version;
 }
+
+export function validateFixtures(fixturePath: string): string {
+  try {
+    const contents = fs.readFileSync(fixturePath, "utf8");
+    // Offline validation has no comparison workspace for path-based IDs.
+    const identityPath = path.isAbsolute(fixturePath)
+      ? path.basename(fixturePath)
+      : fixturePath;
+    parseFixtures(contents, identityPath);
+  } catch (error) {
+    throw new Error(`Validation failed for ${fixturePath}: ${String(error)}`, {
+      cause: error,
+    });
+  }
+  return `${fixturePath}: fixture is valid`;
+}
+
 export function parseArgs(
   rawArgs: string[] = process.argv.slice(2),
 ): CliCommand {
+  if (rawArgs[0] === "validate") {
+    const [fixturePath, extra] = rawArgs.slice(1);
+    if (fixturePath === "--help" || fixturePath === "-h") {
+      return { kind: "help" };
+    }
+    if (!fixturePath?.trim()) {
+      throw new Error("validate requires a fixtures file path");
+    }
+    if (fixturePath.startsWith("-")) {
+      throw new Error(`Unknown option: ${fixturePath}`);
+    }
+    if (extra !== undefined) {
+      throw new Error(`Unexpected argument: ${extra}`);
+    }
+    return { kind: "validate", fixturePath };
+  }
+
   let fixturesPath: string | null = null;
   let baseFixturesPath: string | null = null;
   let positionalOutputPath: string | null = null;
@@ -292,6 +331,16 @@ async function main() {
     } catch (err: any) {
       console.error(err.message);
       process.exit(1);
+    }
+    return;
+  }
+
+  if (command.kind === "validate") {
+    try {
+      console.log(validateFixtures(command.fixturePath));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
     }
     return;
   }
