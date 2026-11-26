@@ -15,6 +15,11 @@ cd WeighIn
 npm ci
 ```
 
+CI installs with `npm ci` and also fails if `npm install --package-lock-only`
+would change `package-lock.json`. If you change dependencies, run `npm install`
+(or `npm install --package-lock-only`) and commit the updated lockfile together
+with `package.json`.
+
 JavaScript tests do not need Docker or a live RPC. Native replay/integration needs
 Linux x64, Rust 1.95.0 and native build prerequisites. Contract integration also
 needs `wasm32v1-none`, checksum-verified Stellar CLI 28.1.0 and Docker. Provision
