@@ -91,14 +91,19 @@ the target BASE ref from `origin`, builds each revision from its own fixture
 and source, simulates its invocations through the configured Soroban RPC, and
 compares the resulting records.
 
-The standalone CLI measures only its supplied fixtures; use it for an
-individual measurement, not as a substitute for the Action's full
-BASE/HEAD workflow:
+For a local comparison, the standalone CLI can measure two supplied fixture
+sets that point to already-built BASE and HEAD WASM artifacts:
 
 ```bash
-weighin ./weighin-fixtures.json ./amm-results.json \
+weighin ./head/weighin-fixtures.json ./local-results.json \
+  --base-fixtures ./base/weighin-fixtures.json \
   --rpc-url http://localhost:8000/rpc
 ```
+
+The CLI prints per-function and configured aggregate metric deltas, then
+evaluates the local `weighin.toml` policy. It does not check out source
+revisions or build their contracts, so it is not a substitute for the Action's
+full BASE/HEAD workflow.
 
 For CI threshold examples, configure `weighin.toml`. Relative rules compare
 HEAD with BASE; absolute limits constrain HEAD consumption:
