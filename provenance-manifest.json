@@ -88,6 +88,10 @@
       "sha256": "298d7fc46ca107fd04816542ae08966eca2e87eb100cb88cd5c09e294b2cf3a4"
     },
     {
+      "path": "src/deployer-lock.ts",
+      "sha256": "30d797ac6dc9cb4c3f2407c8386f29cfe39a83c3af23136270bfa7329245258e"
+    },
+    {
       "path": "src/diff.ts",
       "sha256": "26587794b82fba63f00cda7fc53596c5e6379e5b2a2953af1471c7cdc89d47be"
     },
