@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { xdr } from "@stellar/stellar-sdk";
 import type { IdentifiedContract } from "./identity";
 import type { BindingSelectorStep, SetupBinding } from "./measurement";

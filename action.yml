@@ -39,13 +39,13 @@ inputs:
     default: ''
 
   rpc-url:
-    description: >
-      Soroban RPC endpoint to use for simulation. Defaults to the
-      protocol-28 standalone network provisioned by the caller.
-      Override only for a compatible standalone sidecar; public networks and other
-      protocols are not supported by the current measurement path.
-    required: false
-    default: 'http://localhost:8000/rpc'
+  description: >
+    Soroban RPC endpoint to use for simulation. Takes precedence over
+    WEIGHIN_RPC_URL when explicitly provided. If omitted, WEIGHIN_RPC_URL
+    is used, falling back to http://localhost:8000/rpc.
+    Only compatible standalone protocol-28 endpoints are supported.
+  required: false
+  
 
   github-token:
     description: >

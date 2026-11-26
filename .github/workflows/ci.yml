@@ -40,7 +40,12 @@ jobs:
           echo "$RUNNER_TEMP/stellar-cli" >> "$GITHUB_PATH"
       - run: npm ci
       - name: Verify package manifest and lockfile are synchronized
-        run: git diff --exit-code -- package-lock.json
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          if ! git diff --exit-code -- package-lock.json; then
+            echo "::error file=package-lock.json::package-lock.json is out of sync with package.json. Run 'npm install --package-lock-only' locally and commit the result."
+            exit 1
+          fi
       - name: npm audit (moderate+ advisory gate)
         run: |
           npm audit --audit-level=moderate --json > npm-audit.json
@@ -53,6 +58,7 @@ jobs:
           name: npm-audit-report
           path: npm-audit.json
       - run: npm run lint
+      - run: npm run spellcheck
       - run: npm run typecheck
       - run: npm run test
 

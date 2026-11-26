@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import * as core from "@actions/core";
 import * as exec from "@actions/exec";
 import * as github from "@actions/github";
@@ -369,7 +371,11 @@ async function run(
     const configPathRel = core.getInput("config-path");
     const trustedPolicyRef = core.getInput("trusted-policy-ref").trim();
     const trustedPolicyPath = core.getInput("trusted-policy-path").trim();
-    const rpcUrl = core.getInput("rpc-url") || "http://localhost:8000/rpc";
+    const rpcUrl =
+  core.getInput("rpc-url").trim() ||
+  process.env.WEIGHIN_RPC_URL?.trim() ||
+  "http://localhost:8000/rpc";
+    
     configuredRpcUrl = rpcUrl;
     const githubToken = core.getInput("github-token");
     const commentAuthorModeRaw =

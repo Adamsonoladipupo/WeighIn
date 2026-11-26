@@ -2,7 +2,7 @@
 
 Run these commands from the repository root with the [contributor toolchain](../CONTRIBUTING.md#install)
 and a running protocol-28 standalone network. Build the example contracts with
-the reference crate's manifest and lockfile in an ignored build directory.
+the reference crate's manifest and lockfile in an ignored build directory. When the Phase 1 is done you build the production contracts
 
 ```bash
 set -e

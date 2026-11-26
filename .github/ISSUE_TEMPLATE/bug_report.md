@@ -1,31 +1,57 @@
 ---
 name: Bug report
-about: Create a report to help us improve WeighIn
-title: ''
+about: Report a bug in WeighIn calculations, CLI execution, or contract handling
+title: '[BUG] '
 labels: bug
 assignees: ''
-
 ---
 
-**Describe the bug**
-A clear and concise description of what the bug is.
+## Bug summary
 
-**To Reproduce**
-Steps to reproduce the behavior:
-1. Trigger action with '...' inputs
-2. Configured fixtures as '...'
-3. See error in action logs...
+Describe the calculation discrepancy or CLI execution bug. Include the relevant command, configuration, or fixture details.
 
-**Expected behavior**
-A clear and concise description of what you expected to happen.
+## Reproduction steps
 
-**Logs**
-If applicable, paste the GitHub Action log output here.
+Provide the smallest set of steps or inputs that reliably reproduces the issue:
 
-**Desktop/Environment:**
- - OS: [e.g. ubuntu-latest]
- - Action Version: [e.g. main, v1]
- - Soroban/Stellar RPC version: [e.g. quickstart:latest]
+1. Run `...` with `...` inputs/configuration.
+2. Observe `...`.
 
-**Additional context**
-Add any other context about the problem here.
+## Expected behavior
+
+What did you expect the calculation or command to do?
+
+## Actual behavior
+
+What happened instead? For calculation discrepancies, include the input values and expected versus actual results.
+
+## Environment
+
+- Node.js version (`node --version`):
+- WeighIn version or commit:
+- OS and version:
+
+## Logs or output
+
+Paste relevant CLI output or logs here. Remove secrets and private keys before posting.
+
+```
+Paste logs or command output here
+```
+
+## Configuration
+
+Include the relevant `weighin.toml` or contract configuration. Remove secrets and private keys before posting.
+
+```toml
+# Paste configuration here
+```
+
+## Additional context
+
+Add any other context, screenshots, or sample data that may help diagnose the issue.
+
+## Checklist
+
+- [ ] I have searched existing issues for a duplicate report.
+- [ ] I have removed secrets and private keys from logs and configuration.

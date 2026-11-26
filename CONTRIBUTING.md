@@ -15,6 +15,11 @@ cd WeighIn
 npm ci
 ```
 
+CI installs with `npm ci` and also fails if `npm install --package-lock-only`
+would change `package-lock.json`. If you change dependencies, run `npm install`
+(or `npm install --package-lock-only`) and commit the updated lockfile together
+with `package.json`.
+
 JavaScript tests do not need Docker or a live RPC. Native replay/integration needs
 Linux x64, Rust 1.95.0 and native build prerequisites. Contract integration also
 needs `wasm32v1-none`, checksum-verified Stellar CLI 28.1.0 and Docker. Provision
@@ -42,6 +47,13 @@ snapshots under `docs/experiments`, generated bundles, and binary WASMs.
 `npm test` builds TypeScript, runs Node behavior/evidence tests under `tests`, and
 runs Vitest tests under `test`. `npm run test:watch` starts Vitest watch mode.
 Use `npm run format` for intentional formatting changes.
+
+To debug Vitest in VS Code, create a local, uncommitted `.vscode/launch.json`
+with a Node launch configuration whose `runtimeExecutable` is `node` and whose
+`runtimeArgs` are `./node_modules/vitest/vitest.mjs`, `run`, `--dir`, `test`, and
+`--pool=threads`. Editor configuration must stay outside version control:
+ForgeGuard blocks committed editor and devcontainer configs because they can
+execute when a folder is opened.
 
 The Node test files run one at a time (`--test-concurrency=1`). Packing the
 consumer artifact runs the `prepack` lifecycle, which rebuilds `dist/` and

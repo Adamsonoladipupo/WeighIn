@@ -105,7 +105,9 @@ describe("WASM preflight and resolution (#119, #120)", () => {
       const declared = "target/wasm32v1-none/release/contract.wasm";
 
       // By default, must fail closed
-      expect(() => resolveWasmPath(tmpDir, declared)).toThrow(/WASM not found/);
+      expect(() => resolveWasmPath(tmpDir, declared)).toThrow(
+        /WASM file not found at path:/,
+      );
 
       // With opt-in, it should resolve to alternate
       const resolved = resolveWasmPath(tmpDir, declared, {
@@ -165,6 +167,40 @@ describe("WASM preflight and resolution (#119, #120)", () => {
       ).toThrowError(
         /fixtures\/test\.json \/ contract-a[\s\S]*fixtures\/test\.json \/ contract-b/,
       );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws an informative error when a configured WASM file does not exist (#321)", async () => {
+    const {
+      resolveWasmPath,
+      resolveContractWasmPath,
+      preflightContractArtifacts,
+    } = await import("../src/measurement");
+    const os = await import("os");
+    const fs = await import("fs");
+    const path = await import("path");
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "weighin-test-"));
+    try {
+      const missingRelative = "target/wasm32v1-none/release/nonexistent.wasm";
+      const missingAbsolute = path.resolve(tmpDir, missingRelative);
+      const expectedMessage = `WASM file not found at path: ${missingAbsolute}. Did you run 'stellar contract build'?`;
+
+      expect(() => resolveWasmPath(tmpDir, missingRelative)).toThrowError(
+        expectedMessage,
+      );
+      expect(() =>
+        resolveContractWasmPath(tmpDir, missingRelative),
+      ).toThrowError(expectedMessage);
+      expect(() =>
+        preflightContractArtifacts(
+          tmpDir,
+          [{ wasm_path: missingRelative, logical_id: "missing-contract" }],
+          "weighin-fixtures.json",
+        ),
+      ).toThrowError(expectedMessage);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
