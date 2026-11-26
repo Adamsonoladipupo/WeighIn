@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "purpose": "verifiable WeighIn package build provenance",
-  "source_revision": "02d9ea6dc8fbdb8710fa7dfff2976f9c782983b8",
+  "source_revision": "889a0d54040e35c729482114ea5e445a4e71d31a",
   "tools": {
     "node": "v24.3.0",
     "npm": "unavailable"
@@ -65,7 +65,7 @@
     },
     {
       "path": "src/cli.ts",
-      "sha256": "2069320ced3b9de27a0d8488a1137adef6824d74c83f4ef0d18875e0c20a55a4"
+      "sha256": "0c929db050b77c7528aa26e787b592205ed9b4e56f35b1cefd5d8385d5c5cdf2"
     },
     {
       "path": "src/comment-action.ts",
