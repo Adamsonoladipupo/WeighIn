@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "purpose": "verifiable WeighIn package build provenance",
-  "source_revision": "740895503df932a11e6e3ce78c9c008bee6b1554",
+  "source_revision": "01bfde259330503f2884a378375c45edce918971",
   "tools": {
-    "node": "v24.15.0",
-    "npm": "11.12.1"
+    "node": "v24.22.0",
+    "npm": "unavailable"
   },
   "inputs": [
     {
@@ -17,11 +17,11 @@
     },
     {
       "path": "bundled/index.js",
-      "sha256": "febef524221b136f025261127f101fa6208680e2c4110dcd89d44fa6f64f8c2f"
+      "sha256": "f6120111d990fbcecf1eda14052b52c590639c0eef8bfb2fad9bd751e0585bd4"
     },
     {
       "path": "native/simulation/Cargo.lock",
-      "sha256": "4e8dbe9f2964a53fdf7aebc5f8de27f81a427e165c9e81a7d6565d22f821d22f"
+      "sha256": "5a5db79990e64417ebc4a1f3a686987326f35ef93420bc94471e0b9b6cb94432"
     },
     {
       "path": "native/simulation/Cargo.toml",
@@ -29,7 +29,7 @@
     },
     {
       "path": "native/simulation/src/main.rs",
-      "sha256": "ca7af818f409ab160148f500e07f4fa67dd6c1c6107cd061c3fa8a8bf4a64def"
+      "sha256": "7e90f35219ad57e714bb404ddd0d08674212010e5f19b9768d75b3d040291b29"
     },
     {
       "path": "package-lock.json",
@@ -65,7 +65,7 @@
     },
     {
       "path": "src/cli.ts",
-      "sha256": "04cef0a39b88cf7b75fb02872cb3bf9cff3876e2238d03f8cbe80c436823a1a5"
+      "sha256": "9ac0af1104cd0e0709185bf81b4817d2a03b7d70376f286a982c379ff4889d17"
     },
     {
       "path": "src/comment-action.ts",
@@ -73,7 +73,7 @@
     },
     {
       "path": "src/comment.ts",
-      "sha256": "d9b0f4ac6df4e0debb9b8049c61f9eab20f1a16350df1f55799af218c30c84ef"
+      "sha256": "42880e13df6a161192e6841f7f37310ffee49f3b80e98b87007d03bf81dd57f4"
     },
     {
       "path": "src/config.ts",
@@ -101,7 +101,7 @@
     },
     {
       "path": "src/identity.ts",
-      "sha256": "29dc21ed5eca66bf6643d9edf94c826cf395b031ebc456b7b37355e00bdc9c2f"
+      "sha256": "703a255567df818338a6067d76488ede74853729ad162e2c1a3b56360ff62d80"
     },
     {
       "path": "src/measurement.ts",

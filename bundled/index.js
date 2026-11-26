@@ -52550,6 +52550,37 @@ function canonical(value) {
   }
   return value;
 }
+function isTypedArgNode(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && typeof value.type === "string" && "value" in value;
+}
+function canonicalArgValue(type, value) {
+  if (type === "vec" && Array.isArray(value)) {
+    return value.map(
+      (item) => isTypedArgNode(item) ? canonicalArg(item) : canonical(item)
+    );
+  }
+  if (type === "map" && Array.isArray(value)) {
+    return value.map((entry) => {
+      if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
+        return Object.fromEntries(
+          Object.keys(entry).sort().map((key) => [
+            key,
+            (key === "key" || key === "value") && isTypedArgNode(entry[key]) ? canonicalArg(entry[key]) : canonical(entry[key])
+          ])
+        );
+      }
+      return canonical(entry);
+    });
+  }
+  return canonical(value);
+}
+function canonicalArg(arg) {
+  if ("binding" in arg) {
+    return { type: arg.type.toLowerCase(), binding: canonical(arg.binding) };
+  }
+  const type = arg.type.toLowerCase();
+  return { type, value: canonicalArgValue(type, arg.value) };
+}
 function parseFixtures(raw, fixturePath) {
   let fixtures;
   try {
@@ -52583,9 +52614,7 @@ function parseFixtures(raw, fixturePath) {
     }
     const caseIds = /* @__PURE__ */ new Set();
     const invocations = contract.invocations.map((invocation) => {
-      const args = invocation.args.map(
-        (arg) => "binding" in arg ? { type: arg.type.toLowerCase(), binding: canonical(arg.binding) } : { type: arg.type.toLowerCase(), value: canonical(arg.value) }
-      );
+      const args = invocation.args.map((arg) => canonicalArg(arg));
       const case_id = invocation.id === void 0 ? `args:${JSON.stringify(args)}` : `id:${invocation.id}`;
       const key = JSON.stringify([invocation.function_name, case_id]);
       if (caseIds.has(key)) {
@@ -72931,9 +72960,25 @@ function renderComment(diff, violations, baseRef, headSha, policyOrigin) {
       lines.push("");
     }
     const sortedFunctions = [...contract.functions].sort(compareFunctions);
-    for (const fn of sortedFunctions) {
-      lines.push(renderFunctionTable(fn));
+    const visibleFunctionCount = 10;
+    if (sortedFunctions.length > visibleFunctionCount) {
+      for (const fn of sortedFunctions.slice(0, visibleFunctionCount)) {
+        lines.push(renderFunctionTable(fn));
+        lines.push("");
+      }
+      lines.push("<details><summary>Secondary metrics</summary>");
       lines.push("");
+      for (const fn of sortedFunctions.slice(visibleFunctionCount)) {
+        lines.push(renderFunctionTable(fn));
+        lines.push("");
+      }
+      lines.push("</details>");
+      lines.push("");
+    } else {
+      for (const fn of sortedFunctions) {
+        lines.push(renderFunctionTable(fn));
+        lines.push("");
+      }
     }
   }
   lines.push("---");
