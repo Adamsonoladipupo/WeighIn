@@ -5,6 +5,7 @@ import { execSync } from "child_process";
 import { runMeasurement } from "./measurement";
 import { parseFixtures } from "./identity";
 import { diffBenchmarks, type DiffResult } from "./diff";
+import { buildDiffSummaryRows } from "./diff-summary";
 import { enforceThresholds, loadConfig } from "./threshold";
 import { discoverSdkAssociations, formatSdkVersions } from "./sdk-version";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
@@ -47,9 +48,9 @@ export const USAGE = "Usage: weighin [options] [fixtures.json] [results.json]";
 
 export const HELP_TEXT = `${USAGE}
 
-Measure Soroban contract resource usage from an existing fixtures file.
-The command only measures: it does not build contracts, compare BASE/HEAD
-revisions, enforce thresholds or post comments.
+Measure Soroban contract resource usage from existing fixture declarations.
+Use --base-fixtures to compare a local BASE fixture set with the HEAD set.
+The CLI uses existing WASM artifacts; it does not build contracts or post comments.
 
 Positional arguments:
   fixtures.json         Fixtures file to measure (default: ${DEFAULT_FIXTURES_PATH})
@@ -59,6 +60,8 @@ Options:
   --rpc-url <url>       Standalone Stellar RPC endpoint (default: ${DEFAULT_RPC_URL})
   --output <path>       Results file, or - for JSON on stdout (default: ${DEFAULT_OUTPUT_PATH})
   --helper-path <path>  Use an existing compatible native simulation helper
+  --base-fixtures <path>
+                        Compare a local BASE fixture set with the HEAD fixtures
   --json-stdout         Write JSON results to stdout instead of a file
   --stdout              Alias for --json-stdout
   --allow-cross-target-substitution
@@ -147,6 +150,11 @@ export function parseArgs(
         );
         continue;
       }
+      if (arg === "--base-fixtures") {
+        markScalar(arg);
+        baseFixturesPath = nextValue(arg);
+        continue;
+      }
       if (arg === "--stdout" || arg === "--json-stdout") {
         jsonStdout = true;
         continue;
@@ -164,25 +172,15 @@ export function parseArgs(
       }
     }
 
-    // Track positionals explicitly instead of inferring them from a value.
     positionalCount++;
     if (positionalCount === 1) {
       fixturesPath = arg;
     } else if (positionalCount === 2) {
       if (arg === "-") {
         jsonStdout = true;
-      } else if (!baseFixturesPath) {
-        // Second positional is treated as output path when no base comparison
-        // is configured; it falls back to baseFixturesPath only when a base
-        // fixtures path is explicitly needed for comparison mode.
-        positionalOutputPath = arg;
       } else {
-        // baseFixturesPath already set (comparison mode); second positional is
-        // ignored for output but still tracked as a positional argument.
+        positionalOutputPath = arg;
       }
-    } else if (positionalCount === 3 && baseFixturesPath) {
-      // Third positional is the output path
-      positionalOutputPath = arg;
     } else {
       throw new Error(`Unexpected argument: ${arg}`);
     }
@@ -339,8 +337,11 @@ async function main() {
         allowCrossTargetSubstitution,
       });
 
-      const diff = diffBenchmarks(baseResults, headResultsArray);
       config = loadConfig("weighin.toml");
+      const diff = diffBenchmarks(baseResults, headResultsArray, config);
+      const summaryRows = buildDiffSummaryRows(diff);
+      console.log("Benchmark diff summary:");
+      console.table(summaryRows);
       violations = enforceThresholds(diff, config);
 
       // Count total benchmarks from head results

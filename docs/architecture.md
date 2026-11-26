@@ -3,8 +3,10 @@
 WeighIn consists of a TypeScript GitHub Action, a measurement CLI/API, and a
 protocol-matched Rust simulation helper. The Action compares configured
 benchmarks between a fetched BASE revision and its existing HEAD checkout.
-The CLI only measures existing WASMs. [Evidence](EVIDENCE.md) records tested
-behavior; [limitations](KNOWN_LIMITATIONS.md) defines the supported scope.
+The CLI measures existing WASMs and can compare two caller-supplied local
+fixture sets. It does not check out or build BASE/HEAD source revisions.
+[Evidence](EVIDENCE.md) records tested behavior; [limitations](KNOWN_LIMITATIONS.md)
+defines the supported scope.
 
 ## Entry point and configuration
 

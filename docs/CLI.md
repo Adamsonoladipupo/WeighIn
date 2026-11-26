@@ -81,6 +81,7 @@ The following options are supported by the current CLI implementation.
 | `--rpc-url <url>` | Standalone Stellar RPC endpoint | `http://localhost:8000/rpc` |
 | `--output <path>` | Results output file; use `-` for stdout | `weighin-results.json` |
 | `--helper-path <path>` | Path to an existing compatible native simulation helper | Automatically provisioned helper |
+| `--base-fixtures <path>` | Compare the supplied HEAD fixture set with a local BASE fixture set | Disabled |
 | `--json-stdout` | Write JSON measurement results to stdout | Disabled |
 | `--stdout` | Alias for `--json-stdout` | Disabled |
 | `--allow-cross-target-substitution` | Allow cross-target WASM substitution | Disabled |
@@ -138,6 +139,28 @@ weighin weighin-fixtures.json --output -
 
 When JSON stdout mode is enabled, diagnostic and progress messages are
 redirected to stderr so stdout contains the JSON result.
+
+### Local BASE/HEAD Comparison
+
+Use `--base-fixtures` to compare two local fixture declarations and print a
+metric summary table:
+
+```bash
+weighin ./head/weighin-fixtures.json ./head-results.json \
+  --base-fixtures ./base/weighin-fixtures.json \
+  --rpc-url http://localhost:8000/rpc
+```
+
+The first positional fixture file is HEAD; `--base-fixtures` supplies BASE.
+Both fixture sets must reference existing, compatible WASM artifacts. The CLI
+measures each set, displays contract/function metrics and configured aggregate
+metrics in a `Metric / Base / Head / Delta / Status` table, then evaluates the
+loaded `weighin.toml` policies. Positive deltas are regressions, negative
+deltas are improvements, zero deltas are unchanged, and non-comparable values
+are displayed as `N/A` with an `Unavailable` status.
+
+This local mode does not check out or build source revisions. Use the GitHub
+Action for the full BASE/HEAD source-build and pull-request comparison.
 
 ### Native Simulation Helper
 
@@ -324,15 +347,18 @@ file, Git repository, RPC endpoint, or native simulation helper.
 | `1` | A runtime, configuration, argument-validation, measurement, or other execution error occurred. |
 
 The CLI exits with code `1` when execution fails, including when an
-unsupported argument is supplied or a required measurement cannot be
-completed.
+unsupported argument is supplied, a required measurement cannot be completed,
+or configured comparison thresholds are violated.
 
-**Important:** The standalone CLI does not implement the complete
-BASE-versus-HEAD pull request comparison. Threshold regression decisions
-for pull requests are performed by the GitHub Action.
+The standalone CLI can compare two caller-supplied local fixture sets with
+`--base-fixtures`. It uses existing WASM artifacts and the local
+`weighin.toml` policy; it does not fetch or build source revisions.
 
-The GitHub Action exposes its own `result` output (`pass` or `fail`) and
-fails the Action when its comparison or policy evaluation fails.
+The GitHub Action remains responsible for the full pull-request workflow:
+checking out BASE and HEAD, building their contracts, comparing the resulting
+measurements, and publishing PR reports. It exposes its own `result` output
+(`pass` or `fail`) and fails the Action when comparison or policy evaluation
+fails.
 
 ## Argument Validation
 
@@ -343,11 +369,12 @@ The following conditions are rejected:
 
 - Unknown options.
 - Missing option values.
-- Duplicate scalar options such as `--rpc-url`, `--output`, and
-  `--helper-path`.
+- Duplicate scalar options such as `--rpc-url`, `--output`,
+  `--helper-path`, and `--base-fixtures`.
 - Unexpected positional arguments.
 - Combining positional output paths with `--output`.
 - Combining JSON stdout mode with a file output path.
+- Combining JSON stdout mode with `--base-fixtures`.
 - Treating a token beginning with `--` as an option value.
 
 Use `--` to stop option parsing when a positional path begins with a dash.
@@ -367,9 +394,11 @@ The standalone CLI and GitHub Action serve different purposes.
 | Measure existing WASM files | Yes | Yes |
 | Build HEAD contracts | No | Yes, by default |
 | Build BASE contracts | No | Yes, by default |
-| Compare BASE and HEAD | No | Yes |
-| Generate resource differences | No | Yes |
-| Enforce PR regression policies | No complete comparison | Yes |
+| Compare two supplied local fixture sets | Yes (`--base-fixtures`) | Yes |
+| Check out source revisions | No | Yes |
+| Generate resource differences | Yes | Yes |
+| Enforce local comparison policies | Yes | Yes |
+| Enforce PR regression policies | No full PR context | Yes |
 | Generate PR benchmark reports | No | Yes |
 | Generate PR metadata | No | Yes |
 | Publish PR comments | No | Through separate comment workflow |
