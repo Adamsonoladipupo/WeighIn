@@ -685,7 +685,7 @@ export function resolveContractWasmPath(
       resolved = altPath;
     } else {
       throw new Error(
-        `WASM not found: ${resolved}\nBuild the contract before running measurements.`,
+        `WASM file not found at path: ${resolved}. Did you run 'stellar contract build'?`,
       );
     }
   }
@@ -1214,7 +1214,7 @@ export function resolveWasmPath(
   }
 
   throw new Error(
-    `WASM not found: ${wasmPath}\nBuild the contract before running measurements.`,
+    `WASM file not found at path: ${wasmPath}. Did you run 'stellar contract build'?`,
   );
 }
 
