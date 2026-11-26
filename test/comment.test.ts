@@ -4,6 +4,8 @@ import {
   findReportComment,
   upsertPrComment,
   COMMENT_MARKER,
+  MAX_COMMENT_LENGTH,
+  TRUNCATION_NOTICE,
 } from "../src/comment";
 import { DiffResult } from "../src/diff";
 import { Violation } from "../src/threshold";
@@ -369,6 +371,364 @@ describe("renderComment", () => {
     expect(comment).toContain("<details><summary>Secondary metrics</summary>");
     expect(comment).toContain("</details>");
     expect(comment).toContain("#### `function-11 / id:case-11`");
+  });
+
+  it("truncates comment with many benchmark rows and appends truncation notice", () => {
+    // Create a diff with many functions, each with many metrics to generate a large comment
+    const diff = createMockDiff(false);
+    diff.contracts[0].functions = Array.from({ length: 250 }, (_, index) => ({
+      function_name: `benchmark-function-${index + 1}`,
+      case_id: `id:case-${index + 1}`,
+      hasRegression: index % 10 === 0, // Some regressions for variety
+      metrics: [
+        {
+          key: "cpu_instructions" as const,
+          base: { consumed: 100000 + index * 100, limit: 1000000 },
+          head: { consumed: 110000 + index * 100, limit: 1000000 },
+          delta: 10000,
+          pct: 10.0,
+          regression: true,
+        },
+        {
+          key: "memory_bytes" as const,
+          base: { consumed: 50000 + index * 50, limit: 500000 },
+          head: { consumed: 55000 + index * 50, limit: 500000 },
+          delta: 5000,
+          pct: 10.0,
+          regression: true,
+        },
+        {
+          key: "ledger_write_bytes" as const,
+          base: { consumed: 1000 + index * 10, limit: 10000 },
+          head: { consumed: 1100 + index * 10, limit: 10000 },
+          delta: 100,
+          pct: 10.0,
+          regression: true,
+        },
+        {
+          key: "ledger_read_entries" as const,
+          base: { consumed: 2000 + index * 5, limit: 5000 },
+          head: { consumed: 2100 + index * 5, limit: 5000 },
+          delta: 100,
+          pct: 5.0,
+          regression: true,
+        },
+        {
+          key: "ledger_read_bytes" as const,
+          base: { consumed: 30000 + index * 20, limit: 100000 },
+          head: { consumed: 31000 + index * 20, limit: 100000 },
+          delta: 1000,
+          pct: 3.3,
+          regression: true,
+        },
+        {
+          key: "ledger_write_entries" as const,
+          base: { consumed: 500 + index * 2, limit: 2000 },
+          head: { consumed: 550 + index * 2, limit: 2000 },
+          delta: 50,
+          pct: 10.0,
+          regression: true,
+        },
+        {
+          key: "events_count" as const,
+          base: { consumed: 50 + index, limit: 200 },
+          head: { consumed: 55 + index, limit: 200 },
+          delta: 5,
+          pct: 10.0,
+          regression: true,
+        },
+        {
+          key: "event_data_bytes" as const,
+          base: { consumed: 1000 + index * 10, limit: 5000 },
+          head: { consumed: 1100 + index * 10, limit: 5000 },
+          delta: 100,
+          pct: 10.0,
+          regression: true,
+        },
+      ],
+    }));
+
+    const comment = renderComment(diff, [], "main", "abcdef12345678");
+
+    // Verify the comment is truncated to stay under the safe limit
+    expect(comment.length).toBeLessThanOrEqual(MAX_COMMENT_LENGTH);
+
+    // Verify the truncation notice is appended
+    expect(comment).toContain(TRUNCATION_NOTICE.trim());
+    expect(comment).toContain("⚠️ **Report truncated**");
+
+    // Verify the marker is still present (it should be before the truncation notice)
+    expect(comment).toContain("<!-- weighin-report -->");
+  });
+
+  it("generates valid Markdown table with correct headers for single contract", () => {
+    const diff = createMockDiff(true); // Use regression to get non-zero delta
+    const comment = renderComment(diff, [], "main", "abcdef123");
+
+    // Verify function table headers
+    expect(comment).toContain(
+      "| | Metric | Base | Head | Delta | Change | Limit |",
+    );
+    expect(comment).toContain("|---|---|---|---|---|---|---|");
+
+    // Verify pipe delimiters are present (valid Markdown table syntax)
+    const tableLines = comment
+      .split("\n")
+      .filter((line) => line.startsWith("|") && line.includes("Metric"));
+    expect(tableLines.length).toBeGreaterThan(0);
+
+    // Verify values are formatted with thousands separators
+    expect(comment).toContain("1,000"); // Limit value with comma separator
+    expect(comment).toContain("100"); // Base value
+    expect(comment).toContain("110"); // Head value (with regression)
+  });
+
+  it("generates valid Markdown table with correct headers for multi-contract diff", () => {
+    const diff = createMockDiff(false);
+    // Add a second contract
+    diff.contracts.push({
+      fixture_id: "path:fixtures-b.json",
+      logical_id: "id:contract-b",
+      contract_id: "contract-b",
+      base_contract_id: "base-contract-b",
+      head_contract_id: "contract-b",
+      base_commit: "abc",
+      head_commit: "def",
+      hasRegression: false,
+      newFunctions: [],
+      removedFunctions: [],
+      newBenchmarks: [],
+      removedBenchmarks: [],
+      functions: [
+        {
+          function_name: "contract-b-fn",
+          hasRegression: false,
+          metrics: [
+            {
+              key: "cpu_instructions",
+              base: { consumed: 2000, limit: 5000 },
+              head: { consumed: 2500, limit: 5000 },
+              delta: 500,
+              pct: 25.0,
+              regression: true,
+            },
+            {
+              key: "memory_bytes",
+              base: { consumed: 10000, limit: 50000 },
+              head: { consumed: 12000, limit: 50000 },
+              delta: 2000,
+              pct: 20.0,
+              regression: true,
+            },
+          ],
+        },
+      ],
+    });
+
+    const comment = renderComment(diff, [], "main", "abcdef123");
+
+    // Verify both contracts have their tables (using contractLabel format)
+    expect(comment).toContain(
+      "### Contract `path:fixtures.json / id:contract-a`",
+    );
+    expect(comment).toContain(
+      "### Contract `path:fixtures-b.json / id:contract-b`",
+    );
+
+    // Verify function table headers appear for each contract
+    const headerCount = (comment.match(/\| \|\s*Metric\s*\|/g) || []).length;
+    expect(headerCount).toBe(2); // One per contract
+
+    // Verify pipe delimiters throughout
+    const tableRows = comment
+      .split("\n")
+      .filter((line) => line.startsWith("|") && line.includes("|"));
+    expect(tableRows.length).toBeGreaterThan(4); // Headers + separator + data rows for both contracts
+
+    // Verify values are formatted with thousands separators
+    expect(comment).toContain("5,000"); // Limit value with comma
+    expect(comment).toContain("2,500"); // Head value with comma
+    expect(comment).toContain("12,000"); // Head value with comma
+  });
+
+  it("formats numeric values with thousands separators in tables", () => {
+    const diff = createMockDiff(false);
+    diff.contracts[0].functions[0].metrics = [
+      {
+        key: "cpu_instructions",
+        base: { consumed: 1000000, limit: 5000000 },
+        head: { consumed: 1500000, limit: 5000000 },
+        delta: 500000,
+        pct: 50.0,
+        regression: true,
+      },
+      {
+        key: "memory_bytes",
+        base: { consumed: 2500000, limit: 10000000 },
+        head: { consumed: 3000000, limit: 10000000 },
+        delta: 500000,
+        pct: 20.0,
+        regression: true,
+      },
+    ];
+
+    const comment = renderComment(diff, [], "main", "abcdef123");
+
+    // Verify large numbers are formatted with commas
+    expect(comment).toContain("1,000,000"); // Base
+    expect(comment).toContain("1,500,000"); // Head
+    expect(comment).toContain("5,000,000"); // Limit
+    expect(comment).toContain("2,500,000"); // Base memory
+    expect(comment).toContain("3,000,000"); // Head memory
+    expect(comment).toContain("10,000,000"); // Limit memory
+  });
+
+  it("renders valid Markdown pipe-delimited tables for aggregate budgets", () => {
+    const diff = createMockDiff(false);
+    diff.aggregates = [
+      {
+        name: "test-aggregate",
+        member_count: 2,
+        description: "Test aggregate",
+        provenance: {
+          source: "soroban-simulation",
+          protocol_version: 28,
+          network_passphrase: "test-network",
+        },
+        metrics: [
+          {
+            key: "cpu_instructions",
+            base_consumed: 100000,
+            head_consumed: 120000,
+            delta: 20000,
+            pct: 20.0,
+            regression: true,
+            availability: "available",
+            description: "Compute units",
+          },
+          {
+            key: "memory_bytes",
+            base_consumed: 500000,
+            head_consumed: 600000,
+            delta: 100000,
+            pct: 20.0,
+            regression: true,
+            availability: "available",
+            description: "Memory bytes",
+          },
+        ],
+        breakdown: {
+          cpu_instructions: [
+            {
+              logical_id: "member-1",
+              contract_id: "contract-1",
+              function_name: "fn1",
+              case_id: "case1",
+              base_consumed: 50000,
+              head_consumed: 60000,
+            },
+            {
+              logical_id: "member-2",
+              contract_id: "contract-2",
+              function_name: "fn2",
+              case_id: "case2",
+              base_consumed: 50000,
+              head_consumed: 60000,
+            },
+          ],
+          memory_bytes: [
+            {
+              logical_id: "member-1",
+              contract_id: "contract-1",
+              function_name: "fn1",
+              case_id: "case1",
+              base_consumed: 250000,
+              head_consumed: 300000,
+            },
+            {
+              logical_id: "member-2",
+              contract_id: "contract-2",
+              function_name: "fn2",
+              case_id: "case2",
+              base_consumed: 250000,
+              head_consumed: 300000,
+            },
+          ],
+        },
+      },
+    ];
+
+    const comment = renderComment(diff, [], "main", "abcdef123");
+
+    // Verify aggregate budgets table headers
+    expect(comment).toContain(
+      "| | Metric | Base (Sum) | Head (Sum) | Delta | Change | Semantic Unit |",
+    );
+    expect(comment).toContain("|---|---|---|---|---|---|---|");
+
+    // Verify aggregate table data rows
+    expect(comment).toContain("CPU Instructions");
+    expect(comment).toContain("Memory Bytes");
+    expect(comment).toContain("100,000");
+    expect(comment).toContain("120,000");
+    expect(comment).toContain("500,000");
+    expect(comment).toContain("600,000");
+
+    // Verify member breakdown table
+    expect(comment).toContain(
+      "| Member | Function | Case | CPU Instructions (Base → Head) | Memory Bytes (Base → Head) |",
+    );
+    expect(comment).toContain("|---|---|---|---|---|");
+    expect(comment).toContain("member-1");
+    expect(comment).toContain("member-2");
+    expect(comment).toContain("50,000 → 60,000");
+    expect(comment).toContain("250,000 → 300,000");
+  });
+
+  it("renders valid Markdown pipe-delimited tables for policy rules", () => {
+    const diff = createMockDiff(false);
+    const effectivePolicy = {
+      status: "active" as const,
+      mode: "head" as const,
+      path: "weighin.toml",
+      revision: "abc123",
+      content_sha256: "sha256hash",
+      rules: [
+        {
+          target: "contract-a::test-fn",
+          metric: "cpu_instructions",
+          rule: "relative: +10%",
+          source: "weighin.toml",
+        },
+        {
+          target: "global",
+          metric: "memory_bytes",
+          rule: "absolute: 1000000",
+          source: "weighin.toml",
+        },
+      ],
+    };
+
+    const comment = renderComment(
+      diff,
+      [],
+      "main",
+      "abcdef123",
+      effectivePolicy,
+    );
+
+    // Verify policy rules table
+    expect(comment).toContain(
+      "<details><summary>Effective Policy Rules</summary>",
+    );
+    expect(comment).toContain("| Target | Metric | Effective Rule | Source |");
+    expect(comment).toContain("| :--- | :--- | :--- | :--- |");
+    expect(comment).toContain(
+      "| `contract-a::test-fn` | CPU Instructions | `relative: +10%` | weighin.toml |",
+    );
+    expect(comment).toContain(
+      "| `global` | Memory Bytes | `absolute: 1000000` | weighin.toml |",
+    );
   });
 });
 

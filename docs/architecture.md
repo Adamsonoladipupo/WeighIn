@@ -3,8 +3,10 @@
 WeighIn consists of a TypeScript GitHub Action, a measurement CLI/API, and a
 protocol-matched Rust simulation helper. The Action compares configured
 benchmarks between a fetched BASE revision and its existing HEAD checkout.
-The CLI only measures existing WASMs. [Evidence](EVIDENCE.md) records tested
-behavior; [limitations](KNOWN_LIMITATIONS.md) defines the supported scope.
+The CLI measures existing WASMs and can compare two caller-supplied local
+fixture sets. It does not check out or build BASE/HEAD source revisions.
+[Evidence](EVIDENCE.md) records tested behavior; [limitations](KNOWN_LIMITATIONS.md)
+defines the supported scope.
 
 ## Entry point and configuration
 
@@ -82,8 +84,12 @@ caller-owned state is never changed to hide an expiry. Extend the TTL
 externally or use a different deployer key.
 Upload, creation, and declared `setup_invocations` transactions are real
 submitted transactions signed by the deployer account. A generated private
-deployer key is shared across BASE/HEAD in a private temporary file. When a
-contract declares `setup_invocations`, it deploys with a fresh random salt
+deployer key is shared across BASE/HEAD in a private temporary file.
+When multiple deployments or API calls in the same process share a deployer key, transaction
+sequence usage is serialized via same-process mutex locking keyed by network passphrase
+and deployer public account. Ownership is released on rejected or failed transactions so
+concurrent calls neither sign duplicate sequence numbers nor hang.
+When a contract declares `setup_invocations`, it deploys with a fresh random salt
 (refusing pre-existing instances) and prepares, validates source-account-only
 authorization, signs, submits, and confirms each setup invocation in order
 before dependent contracts or measured simulations run; setup consumption is

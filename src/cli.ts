@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: Apache-2.0
+
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 import { runMeasurement } from "./measurement";
 import { parseFixtures } from "./identity";
 import { diffBenchmarks, type DiffResult } from "./diff";
+import { buildDiffSummaryRows } from "./diff-summary";
 import { enforceThresholds, loadConfig } from "./threshold";
 import { discoverSdkAssociations, formatSdkVersions } from "./sdk-version";
 import { redactEndpointSecrets, sanitizeEndpoint } from "./endpoint";
@@ -30,6 +33,7 @@ export interface CliOptions {
   helperPath?: string;
   jsonStdout: boolean;
   verbose: boolean;
+  dryRun: boolean;
   allowCrossTargetSubstitution: boolean;
   baseFixturesPath?: string | null;
 }
@@ -37,6 +41,7 @@ export interface CliOptions {
 export type CliCommand =
   | { kind: "help" }
   | { kind: "version" }
+  | { kind: "validate"; fixturePath: string }
   | { kind: "measure"; options: CliOptions };
 
 const DEFAULT_FIXTURES_PATH = "weighin-fixtures.json";
@@ -47,9 +52,11 @@ export const USAGE = "Usage: weighin [options] [fixtures.json] [results.json]";
 
 export const HELP_TEXT = `${USAGE}
 
-Measure Soroban contract resource usage from an existing fixtures file.
-The command only measures: it does not build contracts, compare BASE/HEAD
-revisions, enforce thresholds or post comments.
+Measure Soroban contract resource usage from existing fixture declarations.
+Use --base-fixtures to compare a local BASE fixture set with the HEAD set.
+The CLI uses existing WASM artifacts; it does not build contracts or post comments.
+
+  weighin validate <fixtures.json>   Validate a fixtures file offline
 
 Positional arguments:
   fixtures.json         Fixtures file to measure (default: ${DEFAULT_FIXTURES_PATH})
@@ -59,10 +66,14 @@ Options:
   --rpc-url <url>       Standalone Stellar RPC endpoint (default: ${DEFAULT_RPC_URL})
   --output <path>       Results file, or - for JSON on stdout (default: ${DEFAULT_OUTPUT_PATH})
   --helper-path <path>  Use an existing compatible native simulation helper
+  --base-fixtures <path>
+                        Compare a local BASE fixture set with the HEAD fixtures
   --json-stdout         Write JSON results to stdout instead of a file
   --stdout              Alias for --json-stdout
+  --json                Emit only machine-readable JSON on stdout (implies --json-stdout)
   --allow-cross-target-substitution
                         Allow cross-target WASM substitution
+  --dry-run             Validate config, fixtures, and WASM paths without RPC
   --                    Treat remaining arguments as positional paths
   -h, --help            Show this help and exit
   --version             Show the installed package version and exit`;
@@ -77,9 +88,43 @@ function readPackageVersion(): string {
   }
   return metadata.version;
 }
+
+export function validateFixtures(fixturePath: string): string {
+  try {
+    const contents = fs.readFileSync(fixturePath, "utf8");
+    // Offline validation has no comparison workspace for path-based IDs.
+    const identityPath = path.isAbsolute(fixturePath)
+      ? path.basename(fixturePath)
+      : fixturePath;
+    parseFixtures(contents, identityPath);
+  } catch (error) {
+    throw new Error(`Validation failed for ${fixturePath}: ${String(error)}`, {
+      cause: error,
+    });
+  }
+  return `${fixturePath}: fixture is valid`;
+}
+
 export function parseArgs(
   rawArgs: string[] = process.argv.slice(2),
 ): CliCommand {
+  if (rawArgs[0] === "validate") {
+    const [fixturePath, extra] = rawArgs.slice(1);
+    if (fixturePath === "--help" || fixturePath === "-h") {
+      return { kind: "help" };
+    }
+    if (!fixturePath?.trim()) {
+      throw new Error("validate requires a fixtures file path");
+    }
+    if (fixturePath.startsWith("-")) {
+      throw new Error(`Unknown option: ${fixturePath}`);
+    }
+    if (extra !== undefined) {
+      throw new Error(`Unexpected argument: ${extra}`);
+    }
+    return { kind: "validate", fixturePath };
+  }
+
   let fixturesPath: string | null = null;
   let baseFixturesPath: string | null = null;
   let positionalOutputPath: string | null = null;
@@ -87,10 +132,11 @@ export function parseArgs(
   let positionalCount = 0;
   let jsonStdout = false;
   let verbose = false;
-  let rpcUrl = DEFAULT_RPC_URL;
+  let rpcUrl = process.env.WEIGHIN_RPC_URL?.trim() || DEFAULT_RPC_URL;
   let helperPath: string | undefined;
   let allowCrossTargetSubstitution = false;
   let endOfOptions = false;
+  let json = false;
   const seenScalarOptions = new Set<string>();
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -147,7 +193,17 @@ export function parseArgs(
         );
         continue;
       }
+      if (arg === "--base-fixtures") {
+        markScalar(arg);
+        baseFixturesPath = nextValue(arg);
+        continue;
+      }
       if (arg === "--stdout" || arg === "--json-stdout") {
+        jsonStdout = true;
+        continue;
+      }
+      if (arg === "--json") {
+        json = true;
         jsonStdout = true;
         continue;
       }
@@ -159,30 +215,24 @@ export function parseArgs(
         allowCrossTargetSubstitution = true;
         continue;
       }
+      if (arg === "--dry-run") {
+        dryRun = true;
+        continue;
+      }
       if (arg.startsWith("--")) {
         throw new Error(`Unknown option: ${arg}`);
       }
     }
 
-    // Track positionals explicitly instead of inferring them from a value.
     positionalCount++;
     if (positionalCount === 1) {
       fixturesPath = arg;
     } else if (positionalCount === 2) {
       if (arg === "-") {
         jsonStdout = true;
-      } else if (!baseFixturesPath) {
-        // Second positional is treated as output path when no base comparison
-        // is configured; it falls back to baseFixturesPath only when a base
-        // fixtures path is explicitly needed for comparison mode.
-        positionalOutputPath = arg;
       } else {
-        // baseFixturesPath already set (comparison mode); second positional is
-        // ignored for output but still tracked as a positional argument.
+        positionalOutputPath = arg;
       }
-    } else if (positionalCount === 3 && baseFixturesPath) {
-      // Third positional is the output path
-      positionalOutputPath = arg;
     } else {
       throw new Error(`Unexpected argument: ${arg}`);
     }
@@ -218,10 +268,44 @@ export function parseArgs(
       helperPath,
       jsonStdout,
       verbose,
+      dryRun,
       allowCrossTargetSubstitution,
       baseFixturesPath,
     },
   };
+}
+
+export function runDryRun(
+  fixturesPath: string,
+  configPath = "weighin.toml",
+): void {
+  loadConfig(configPath);
+
+  if (!fs.existsSync(fixturesPath)) {
+    throw new Error(`Fixtures file not found: ${fixturesPath}`);
+  }
+  const fixturesRaw = fs.readFileSync(fixturesPath, "utf8");
+  const resolvedFixturesPath = path.resolve(fixturesPath);
+  const fixturesSpec = parseFixtures(
+    fixturesRaw,
+    path.relative(process.cwd(), resolvedFixturesPath),
+  );
+
+  const fixturesDir = path.dirname(resolvedFixturesPath);
+  const missingWasmPaths: string[] = [];
+  for (const contract of fixturesSpec.contracts) {
+    const resolvedWasmPath = path.resolve(fixturesDir, contract.wasm_path);
+    if (
+      !fs.existsSync(resolvedWasmPath) ||
+      !fs.statSync(resolvedWasmPath).isFile()
+    ) {
+      missingWasmPaths.push(contract.wasm_path);
+    }
+  }
+
+  if (missingWasmPaths.length > 0) {
+    throw new Error(`Missing WASM file(s): ${missingWasmPaths.join(", ")}`);
+  }
 }
 async function main() {
   let command: CliCommand;
@@ -249,16 +333,40 @@ async function main() {
     return;
   }
 
+  if (command.kind === "validate") {
+    try {
+      console.log(validateFixtures(command.fixturePath));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const {
     fixturesPath,
     outputPath,
     rpcUrl,
     jsonStdout,
     verbose,
+    dryRun,
     helperPath,
+    json,
     allowCrossTargetSubstitution,
     baseFixturesPath,
   } = command.options;
+
+  if (dryRun) {
+    try {
+      runDryRun(fixturesPath);
+      console.log("✔ Configuration and fixtures are valid");
+      return;
+    } catch (error: any) {
+      console.error(error?.message ?? String(error));
+      process.exit(1);
+    }
+  }
+
   const gitCommit = getGitCommit();
 
   // When stdout mode is requested, route diagnostic and progress logs to stderr.
@@ -291,7 +399,7 @@ async function main() {
       ...new Set(associations.flatMap((assoc) => assoc.versions)),
     ];
     sdkSummary = formatSdkVersions(versions);
-    for (const assoc of associations) {
+    for (const assoc of json ? [] : associations) {
       const relative = path.relative(process.cwd(), assoc.wasmPath);
       const lockHint = assoc.lockPath
         ? ` (lock: ${path.relative(process.cwd(), assoc.lockPath)})`
@@ -306,7 +414,7 @@ async function main() {
 
   try {
     verboseLog(
-      verbose,
+      verbose && !json,
       `Starting Weighin Benchmarking...\nFixtures: ${fixturesPath}\nOutput:   ${jsonStdout ? "stdout" : outputPath}\nRPC URL:  ${sanitizeEndpoint(rpcUrl)}\nCommit:   ${gitCommit}\nSDK:      ${sdkSummary}`,
     );
 
@@ -339,8 +447,11 @@ async function main() {
         allowCrossTargetSubstitution,
       });
 
-      const diff = diffBenchmarks(baseResults, headResultsArray);
       config = loadConfig("weighin.toml");
+      const diff = diffBenchmarks(baseResults, headResultsArray, config);
+      const summaryRows = buildDiffSummaryRows(diff);
+      console.log("Benchmark diff summary:");
+      console.table(summaryRows);
       violations = enforceThresholds(diff, config);
 
       // Count total benchmarks from head results
@@ -386,14 +497,16 @@ async function main() {
     const benchmarkLabel = totalBenchmarks === 1 ? "benchmark" : "benchmarks";
     const violationLabel = violationCount === 1 ? "violation" : "violations";
 
-    if (allPassed) {
-      console.log(
-        `✔ ${totalBenchmarks} ${benchmarkLabel} passed, 0 ${violationLabel}`,
-      );
-    } else {
-      console.log(
-        `✖ ${passedCount} ${benchmarkLabel} passed, ${violationCount} ${violationLabel} detected`,
-      );
+    if (!json) {
+      if (allPassed) {
+        console.log(
+          `✔ ${totalBenchmarks} ${benchmarkLabel} passed, 0 ${violationLabel}`,
+        );
+      } else {
+        console.log(
+          `✖ ${passedCount} ${benchmarkLabel} passed, ${violationCount} ${violationLabel} detected`,
+        );
+      }
     }
 
     // Write results file if not jsonStdout
