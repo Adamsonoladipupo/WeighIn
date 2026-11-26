@@ -13,6 +13,20 @@ in pull requests.
 SDK 28.0.0, Stellar CLI 28.1.0 and Rust 1.95.0. See
 [verified evidence](docs/EVIDENCE.md) and [known limitations](docs/KNOWN_LIMITATIONS.md).
 
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+
+## Key Features
+
+- Compare Soroban simulation resource usage between BASE and HEAD.
+- Match benchmark cases by stable fixture IDs across revisions.
+- Enforce regression thresholds and absolute resource caps in CI.
+
 ## Why WeighIn
 
 A contract change can preserve its interface while increasing metered compute,
@@ -57,6 +71,12 @@ paired. Report-only execution passed; `strict_zero_tolerance` on CPU produced
 violations and Action exit 1. The [hosted proof](https://github.com/WeighInNG/WeighIn/actions/runs/37853815025)
 verified that expected failure. Its enclosing verification job is intentionally
 green. [Exact source, hashes, reports and raw responses](docs/EVIDENCE.md) are retained.
+
+## Installation
+
+Use the WeighIn GitHub Action by copying the [benchmark workflow](.github/workflows/weighin.yml)
+into your repository. For local CLI use, install WeighIn with `npm install -g weighin`.
+See the [contributor setup guide](CONTRIBUTING.md#install) to build from source.
 
 ## Quick Start
 
@@ -288,6 +308,14 @@ no matched benchmarks, rather than silently passing. New or removed cases alone
 do not evaluate absolute caps. An absent policy and an explicitly empty global
 limits table remain report-only. Prefer targeted rules as in the quick start.
 Omitting `config-path` still loads the default file if it exists.
+
+## Troubleshooting
+
+- For RPC or network errors, start with [Endpoint diagnostics](#endpoint-diagnostics).
+- If a benchmark has no baseline match, check that both revisions contain the
+  fixture and use the same [benchmark identity](#benchmark-identity).
+- For unsupported configurations or unavailable metrics, see the
+  [known limitations](docs/KNOWN_LIMITATIONS.md).
 
 ## Benchmark Identity
 

@@ -17,6 +17,49 @@ describe("toScVal", () => {
     );
   });
 
+  it("parses boolean true and false correctly", () => {
+    const trueVal = toScVal({ type: "bool", value: true });
+    expect(trueVal.switch().name).toBe("scvBool");
+
+    const falseVal = toScVal({ type: "bool", value: false });
+    expect(falseVal.switch().name).toBe("scvBool");
+
+    // Verify they encode to different XDR
+    expect(trueVal.toXDR("base64")).not.toBe(falseVal.toXDR("base64"));
+  });
+
+  it("rejects non-boolean values for Bool type", () => {
+    // String "true" should fail
+    expect(() => toScVal({ type: "bool", value: "true" })).toThrow(
+      "Invalid value for bool: must be true or false",
+    );
+
+    // String "false" should fail
+    expect(() => toScVal({ type: "bool", value: "false" })).toThrow(
+      "Invalid value for bool: must be true or false",
+    );
+
+    // Number 1 should fail
+    expect(() => toScVal({ type: "bool", value: 1 })).toThrow(
+      "Invalid value for bool: must be true or false",
+    );
+
+    // Number 0 should fail
+    expect(() => toScVal({ type: "bool", value: 0 })).toThrow(
+      "Invalid value for bool: must be true or false",
+    );
+
+    // Empty string should fail
+    expect(() => toScVal({ type: "bool", value: "" })).toThrow(
+      "Invalid value for bool: must be true or false",
+    );
+
+    // Null should fail
+    expect(() => toScVal({ type: "bool", value: null })).toThrow(
+      "Invalid value for bool: must be true or false",
+    );
+  });
+
   it("parses large integers safely from strings", () => {
     const u64 = toScVal({ type: "u64", value: "18446744073709551615" });
     expect(u64.switch().name).toBe("scvU64");

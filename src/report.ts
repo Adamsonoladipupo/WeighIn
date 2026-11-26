@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
@@ -126,6 +128,16 @@ export function writeReportFile(
       `Failed to write WeighIn report to ${targetPath}: ${err.message}`,
     );
   }
+}
+
+/**
+ * Machine-readable CLI output mode.
+ *
+ * When enabled, diagnostics are routed to stderr so stdout carries only the
+ * serialized JSON payload.
+ */
+export function jsonOutputEnabled(argv: readonly string[]): boolean {
+  return argv.includes("--json");
 }
 
 export function generateFailureReport(errorMessage: string): string {

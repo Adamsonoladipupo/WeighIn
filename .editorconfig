@@ -1,0 +1,29 @@
+# EditorConfig is used to maintain consistent coding styles between
+# different editors and integrators.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# TypeScript source files
+[*.ts]
+indent_style = space
+indent_size = 2
+
+# TypeScript configuration and build metadata
+[*.json]
+indent_style = space
+indent_size = 2
+
+# CI workflow files
+[*.yml]
+indent_style = space
+indent_size = 2
+
+# Markdown documentation
+[*.md]
+indent_style = space
+indent_size = 2

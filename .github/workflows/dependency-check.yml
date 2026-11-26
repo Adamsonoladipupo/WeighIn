@@ -1,0 +1,44 @@
+name: Check outdated npm dependencies
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  outdated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Report outdated dependencies and major upgrades
+        run: |
+          status=0
+          npm outdated --json > outdated.json || status=$?
+          node - "$status" <<'NODE'
+          const fs = require('node:fs');
+          const status = Number(process.argv[2]);
+          const dependencies = JSON.parse(fs.readFileSync('outdated.json', 'utf8'));
+
+          if (status > 1 || dependencies.error || (status === 1 && !Object.keys(dependencies).length)) {
+            console.error(dependencies.error ?? `npm outdated failed with status ${status}`);
+            process.exit(1);
+          }
+
+          const major = (version) => Number(version?.match(/^(\d+)\./)?.[1]);
+          const rows = Object.entries(dependencies).map(([name, { current, wanted, latest }]) =>
+            `| ${name} | ${current ?? '—'} | ${wanted} | ${latest} | ${major(latest) > major(current) ? 'Yes' : 'No'} |`
+          );
+          const report = rows.length
+            ? ['| Package | Current | Wanted | Latest | Major upgrade |', '| --- | --- | --- | --- | --- |', ...rows].join('\n')
+            : 'All direct dependencies are up to date.';
+          console.log(report);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## Outdated npm dependencies\n\n${report}\n`);
+          NODE

@@ -43,6 +43,13 @@ snapshots under `docs/experiments`, generated bundles, and binary WASMs.
 runs Vitest tests under `test`. `npm run test:watch` starts Vitest watch mode.
 Use `npm run format` for intentional formatting changes.
 
+To debug Vitest in VS Code, create a local, uncommitted `.vscode/launch.json`
+with a Node launch configuration whose `runtimeExecutable` is `node` and whose
+`runtimeArgs` are `./node_modules/vitest/vitest.mjs`, `run`, `--dir`, `test`, and
+`--pool=threads`. Editor configuration must stay outside version control:
+ForgeGuard blocks committed editor and devcontainer configs because they can
+execute when a folder is opened.
+
 The Node test files run one at a time (`--test-concurrency=1`). Packing the
 consumer artifact runs the `prepack` lifecycle, which rebuilds `dist/` and
 `bundled/` in the checkout; running test files concurrently let one file read a
