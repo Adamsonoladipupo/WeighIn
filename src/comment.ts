@@ -300,6 +300,57 @@ export function trend(delta: number): string {
   return "⚪";
 }
 
+function normalizeSingleLine(value: string): string {
+  return value.replace(/\r\n|[\r\n\u2028\u2029]/g, " ");
+}
+
+function escapeHtmlDelimiters(value: string): string {
+  return value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function formatMarkdownText(value: string): string {
+  return escapeHtmlDelimiters(normalizeSingleLine(value)).replace(/`/g, "\\`");
+}
+
+function formatTableText(value: string): string {
+  return formatMarkdownText(value).replace(/\|/g, "\\|");
+}
+
+function formatInlineCode(value: string): string {
+  const sanitized = escapeHtmlDelimiters(normalizeSingleLine(value));
+  const matches = sanitized.match(/`+/g);
+  const maxRun = matches ? Math.max(...matches.map((m) => m.length)) : 0;
+  const fence = "`".repeat(maxRun + 1);
+  const needsPadding =
+    sanitized.startsWith("`") ||
+    sanitized.endsWith("`") ||
+    (sanitized.startsWith(" ") &&
+      sanitized.endsWith(" ") &&
+      sanitized.trim().length > 0);
+  return needsPadding
+    ? `${fence} ${sanitized} ${fence}`
+    : `${fence}${sanitized}${fence}`;
+}
+
+function formatTableInlineCode(value: string): string {
+  const sanitized = escapeHtmlDelimiters(normalizeSingleLine(value)).replace(
+    /\|/g,
+    "\\|",
+  );
+  const matches = sanitized.match(/`+/g);
+  const maxRun = matches ? Math.max(...matches.map((m) => m.length)) : 0;
+  const fence = "`".repeat(maxRun + 1);
+  const needsPadding =
+    sanitized.startsWith("`") ||
+    sanitized.endsWith("`") ||
+    (sanitized.startsWith(" ") &&
+      sanitized.endsWith(" ") &&
+      sanitized.trim().length > 0);
+  return needsPadding
+    ? `${fence} ${sanitized} ${fence}`
+    : `${fence}${sanitized}${fence}`;
+}
+
 export function benchmarkLabel(fn: BenchmarkIdentity): string {
   return fn.case_id === undefined
     ? fn.function_name
@@ -327,11 +378,11 @@ export function renderFunctionTable(fn: FunctionDiff): string {
   const provenanceDetails: string[] = [];
   if (fn.head_provenance) {
     provenanceDetails.push(
-      `Snapshot ledgers: BASE ${fn.base_provenance?.ledger ?? "Unavailable"} → HEAD ${fn.head_provenance.ledger}.`,
-      `Compute config SHA256: BASE \`${fn.base_provenance?.compute_config_sha256 ?? "Unavailable"}\` → HEAD \`${fn.head_provenance.compute_config_sha256}\`.`,
-      `Full config SHA256: BASE \`${fn.base_provenance?.config_sha256 ?? "Unavailable"}\` → HEAD \`${fn.head_provenance.config_sha256}\`.`,
-      `Resource limits SHA256: BASE \`${fn.base_provenance?.resource_limits_sha256 ?? "Unavailable"}\` → HEAD \`${fn.head_provenance.resource_limits_sha256 ?? "Unavailable"}\`.`,
-      `Helper SHA256: BASE \`${fn.base_provenance?.helper_sha256 ?? "Unavailable"}\` → HEAD \`${fn.head_provenance.helper_sha256}\`.`,
+      `Snapshot ledgers: BASE ${formatMarkdownText(String(fn.base_provenance?.ledger ?? "Unavailable"))} → HEAD ${formatMarkdownText(String(fn.head_provenance.ledger))}.`,
+      `Compute config SHA256: BASE ${formatInlineCode(fn.base_provenance?.compute_config_sha256 ?? "Unavailable")} → HEAD ${formatInlineCode(fn.head_provenance.compute_config_sha256)}.`,
+      `Full config SHA256: BASE ${formatInlineCode(fn.base_provenance?.config_sha256 ?? "Unavailable")} → HEAD ${formatInlineCode(fn.head_provenance.config_sha256)}.`,
+      `Resource limits SHA256: BASE ${formatInlineCode(fn.base_provenance?.resource_limits_sha256 ?? "Unavailable")} → HEAD ${formatInlineCode(fn.head_provenance.resource_limits_sha256 ?? "Unavailable")}.`,
+      `Helper SHA256: BASE ${formatInlineCode(fn.base_provenance?.helper_sha256 ?? "Unavailable")} → HEAD ${formatInlineCode(fn.head_provenance.helper_sha256)}.`,
     );
   }
   provenanceDetails.push(
@@ -341,16 +392,16 @@ export function renderFunctionTable(fn: FunctionDiff): string {
       )
       .map(
         (m) =>
-          `- **${METRIC_LABELS[m.key]}** source: ${m.head.source ? `\`${m.head.source}\`` : "Unavailable"}; limit: ${m.head.limit_source ? `\`${m.head.limit_source}\`` : (m.head.limit_reason ?? "Unavailable")}.`,
+          `- **${METRIC_LABELS[m.key]}** source: ${m.head.source ? formatInlineCode(m.head.source) : "Unavailable"}; limit: ${m.head.limit_source ? formatInlineCode(m.head.limit_source) : m.head.limit_reason ? formatMarkdownText(m.head.limit_reason) : "Unavailable"}.`,
       ),
   );
 
   return [
-    `#### \`${benchmarkLabel(fn)}\``,
+    `#### ${formatInlineCode(benchmarkLabel(fn))}`,
     "",
     ...(fn.head_provenance
       ? [
-          `Compute source: ${fn.head_provenance.source} ${fn.head_provenance.source_version}; protocol ${fn.head_provenance.protocol}.`,
+          `Compute source: ${formatMarkdownText(fn.head_provenance.source)} ${formatMarkdownText(fn.head_provenance.source_version)}; protocol ${formatMarkdownText(String(fn.head_provenance.protocol))}.`,
           "",
         ]
       : []),
@@ -360,7 +411,10 @@ export function renderFunctionTable(fn: FunctionDiff): string {
     "",
     ...fn.metrics
       .filter((m) => m.availability === "unavailable")
-      .map((m) => `- **${metricLabel(m)} unavailable**: ${m.reason}`),
+      .map(
+        (m) =>
+          `- **${metricLabel(m)} unavailable**: ${formatMarkdownText(m.reason ?? "")}`,
+      ),
     ...(provenanceDetails.length > 0
       ? [
           "",
@@ -456,12 +510,12 @@ export function renderComment(
       lines.push("");
     } else if (effectivePolicy.status === "empty") {
       lines.push(
-        `Policy status: **loaded-empty** from **${effectivePolicy.mode ?? "head"}** \`${effectivePolicy.path ?? "weighin.toml"}\` at \`${effectivePolicy.revision ?? "unknown"}\`; content SHA256 \`${effectivePolicy.content_sha256 ?? ""}\` (no threshold rules configured; report-only mode).`,
+        `Policy status: **loaded-empty** from **${formatMarkdownText(effectivePolicy.mode ?? "head")}** ${formatInlineCode(effectivePolicy.path ?? "weighin.toml")} at ${formatInlineCode(effectivePolicy.revision ?? "unknown")}; content SHA256 ${formatInlineCode(effectivePolicy.content_sha256 ?? "")} (no threshold rules configured; report-only mode).`,
       );
       lines.push("");
     } else {
       lines.push(
-        `Policy source: **${effectivePolicy.mode}** \`${effectivePolicy.path}\` at \`${effectivePolicy.revision}\`; content SHA256 \`${effectivePolicy.content_sha256}\`.`,
+        `Policy source: **${formatMarkdownText(effectivePolicy.mode ?? "head")}** ${formatInlineCode(effectivePolicy.path ?? "weighin.toml")} at ${formatInlineCode(effectivePolicy.revision ?? "unknown")}; content SHA256 ${formatInlineCode(effectivePolicy.content_sha256 ?? "")}.`,
       );
       lines.push("");
       if (effectivePolicy.rules.length > 0) {
@@ -471,7 +525,7 @@ export function renderComment(
         lines.push("| :--- | :--- | :--- | :--- |");
         for (const r of effectivePolicy.rules) {
           lines.push(
-            `| \`${r.target}\` | ${METRIC_LABELS[r.metric] ?? r.metric} | \`${r.rule}\` | ${r.source} |`,
+            `| ${formatTableInlineCode(r.target)} | ${formatTableText(METRIC_LABELS[r.metric] ?? r.metric)} | ${formatTableInlineCode(String(r.rule))} | ${formatTableText(r.source)} |`,
           );
         }
         lines.push("");
@@ -481,12 +535,12 @@ export function renderComment(
     }
   } else if (policyOrigin) {
     lines.push(
-      `Policy source: **${policyOrigin.mode}** \`${policyOrigin.path}\` at \`${policyOrigin.revision}\`; content SHA256 \`${policyOrigin.content_sha256}\`.`,
+      `Policy source: **${formatMarkdownText(policyOrigin.mode ?? "")}** ${formatInlineCode(policyOrigin.path ?? "")} at ${formatInlineCode(policyOrigin.revision ?? "")}; content SHA256 ${formatInlineCode(policyOrigin.content_sha256 ?? "")}.`,
     );
     lines.push("");
   }
   lines.push(
-    `${statusText} — comparing \`${baseRef}\` → \`${headSha.slice(0, 8)}\``,
+    `${statusText} — comparing ${formatInlineCode(baseRef)} → ${formatInlineCode(headSha.slice(0, 8))}`,
   );
   lines.push("");
 
@@ -497,7 +551,7 @@ export function renderComment(
     for (const v of sortedViolations) {
       if (v.aggregate_id) {
         lines.push(
-          `- **\`Aggregate: ${v.aggregate_id}\` / ${METRIC_LABELS[v.metric]}**: ${v.message}`,
+          `- **${formatInlineCode(`Aggregate: ${v.aggregate_id}`)} / ${METRIC_LABELS[v.metric]}**: ${formatMarkdownText(v.message)}`,
         );
       } else {
         const measured = diff.contracts
@@ -508,7 +562,7 @@ export function renderComment(
           )
           ?.metrics.find((m) => m.key === v.metric);
         lines.push(
-          `- **\`${contractLabel(v as any)} / ${benchmarkLabel(v as any)}\` / ${measured ? metricLabel(measured) : METRIC_LABELS[v.metric]}**: ${v.message}`,
+          `- **${formatInlineCode(`${contractLabel(v as any)} / ${benchmarkLabel(v as any)}`)} / ${measured ? metricLabel(measured) : METRIC_LABELS[v.metric]}**: ${formatMarkdownText(v.message)}`,
         );
       }
     }
@@ -521,16 +575,16 @@ export function renderComment(
     lines.push("");
     for (const agg of diff.aggregates) {
       lines.push(
-        `#### \`Aggregate: ${agg.name}\` (${agg.member_count} member${agg.member_count === 1 ? "" : "s"})`,
+        `#### ${formatInlineCode(`Aggregate: ${agg.name}`)} (${agg.member_count} member${agg.member_count === 1 ? "" : "s"})`,
       );
       lines.push("");
       if (agg.description) {
-        lines.push(`> ${agg.description}`);
+        lines.push(`> ${formatMarkdownText(agg.description)}`);
         lines.push("");
       }
       if (agg.provenance) {
         lines.push(
-          `Compute source: ${agg.provenance.source}; protocol ${agg.provenance.protocol_version}; network \`${agg.provenance.network_passphrase}\`.`,
+          `Compute source: ${formatMarkdownText(agg.provenance.source)}; protocol ${formatMarkdownText(String(agg.provenance.protocol_version))}; network ${formatInlineCode(agg.provenance.network_passphrase)}.`,
         );
         lines.push("");
       }
@@ -564,7 +618,7 @@ export function renderComment(
             : `${m.pct >= 0 ? "+" : ""}${m.pct.toFixed(1)}%`;
 
         lines.push(
-          `| ${status} | ${METRIC_LABELS[m.key]} | ${baseStr} | ${headStr} | ${deltaStr} | ${pctStr} | ${m.description} |`,
+          `| ${status} | ${METRIC_LABELS[m.key]} | ${baseStr} | ${headStr} | ${deltaStr} | ${pctStr} | ${formatTableText(m.description)} |`,
         );
       }
       lines.push("");
@@ -574,7 +628,9 @@ export function renderComment(
       );
       if (unavailableMetrics.length > 0) {
         for (const m of unavailableMetrics) {
-          lines.push(`- **${METRIC_LABELS[m.key]} unavailable**: ${m.reason}`);
+          lines.push(
+            `- **${METRIC_LABELS[m.key]} unavailable**: ${formatMarkdownText(m.reason ?? "")}`,
+          );
         }
         lines.push("");
       }
@@ -608,7 +664,7 @@ export function renderComment(
             ? memRow.head_consumed.toLocaleString("en-US")
             : "Unavailable";
         lines.push(
-          `| \`${memberName}\` | \`${cpuRow.function_name}\` | \`${cpuRow.case_id ?? "default"}\` | ${cpuBase} → ${cpuHead} | ${memBase} → ${memHead} |`,
+          `| ${formatTableInlineCode(memberName)} | ${formatTableInlineCode(cpuRow.function_name)} | ${formatTableInlineCode(cpuRow.case_id ?? "default")} | ${cpuBase} → ${cpuHead} | ${memBase} → ${memHead} |`,
         );
       }
       lines.push("");
@@ -629,13 +685,13 @@ export function renderComment(
 
   if (sortedNewContracts.length > 0) {
     lines.push(
-      `> **New contracts** (no baseline): ${sortedNewContracts.map((c) => `\`${c}\``).join(", ")}`,
+      `> **New contracts** (no baseline): ${sortedNewContracts.map((c) => formatInlineCode(c)).join(", ")}`,
     );
     lines.push("");
   }
   if (sortedRemovedContracts.length > 0) {
     lines.push(
-      `> **Removed contracts**: ${sortedRemovedContracts.map((c) => `\`${c}\``).join(", ")}`,
+      `> **Removed contracts**: ${sortedRemovedContracts.map((c) => formatInlineCode(c)).join(", ")}`,
     );
     lines.push("");
   }
@@ -643,10 +699,10 @@ export function renderComment(
   // Per-contract sections (sorted copy)
   const sortedContracts = [...diff.contracts].sort(compareContracts);
   for (const contract of sortedContracts) {
-    lines.push(`### Contract \`${contractLabel(contract)}\``);
+    lines.push(`### Contract ${formatInlineCode(contractLabel(contract))}`);
     lines.push("");
     lines.push(
-      `Runtime addresses: BASE \`${contract.base_contract_id}\` → HEAD \`${contract.head_contract_id}\``,
+      `Runtime addresses: BASE ${formatInlineCode(contract.base_contract_id)} → HEAD ${formatInlineCode(contract.head_contract_id)}`,
     );
     lines.push("");
 
@@ -659,13 +715,13 @@ export function renderComment(
 
     if (sortedNewBenchmarks.length > 0) {
       lines.push(
-        `> New benchmarks (no baseline): ${sortedNewBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`,
+        `> New benchmarks (no baseline): ${sortedNewBenchmarks.map((f) => formatInlineCode(benchmarkLabel(f))).join(", ")}`,
       );
       lines.push("");
     }
     if (sortedRemovedBenchmarks.length > 0) {
       lines.push(
-        `> Removed benchmarks: ${sortedRemovedBenchmarks.map((f) => `\`${benchmarkLabel(f)}\``).join(", ")}`,
+        `> Removed benchmarks: ${sortedRemovedBenchmarks.map((f) => formatInlineCode(benchmarkLabel(f))).join(", ")}`,
       );
       lines.push("");
     }

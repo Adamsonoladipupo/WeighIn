@@ -32,6 +32,7 @@ export interface CliOptions {
   rpcUrl: string;
   helperPath?: string;
   jsonStdout: boolean;
+  json: boolean;
   verbose: boolean;
   dryRun: boolean;
   allowCrossTargetSubstitution: boolean;
@@ -137,6 +138,7 @@ export function parseArgs(
   let allowCrossTargetSubstitution = false;
   let endOfOptions = false;
   let json = false;
+  let dryRun = false;
   const seenScalarOptions = new Set<string>();
 
   for (let i = 0; i < rawArgs.length; i++) {
@@ -267,6 +269,7 @@ export function parseArgs(
       rpcUrl,
       helperPath,
       jsonStdout,
+      json,
       verbose,
       dryRun,
       allowCrossTargetSubstitution,
