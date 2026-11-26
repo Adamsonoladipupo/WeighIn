@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import {
   DiffResult,
   FunctionDiff,
@@ -10,6 +12,13 @@ import {
 import { Violation, PolicyOrigin, EffectivePolicyReport } from "./threshold";
 
 export const COMMENT_MARKER = "<!-- weighin-report -->";
+
+/** Maximum GitHub PR comment length is 65,536; we target 60,000 for safety. */
+export const MAX_COMMENT_LENGTH = 60_000;
+
+/** Notice appended when the comment is truncated. */
+export const TRUNCATION_NOTICE =
+  "\n\n> ⚠️ **Report truncated** to fit within GitHub's 65,536-character comment limit. The full report is available in the workflow artifacts.";
 
 export interface CommentInfo {
   id: number;
@@ -264,26 +273,28 @@ function metricLabel(metric: MetricDiff): string {
 }
 
 // Format a numeric value with thousands separators
-function fmt(n: number | null): string {
+export function fmt(n: number | null): string {
   if (n === null) return "Unavailable";
   return n.toLocaleString("en-US");
 }
 
 // Format a delta with sign
-function fmtDelta(delta: number): string {
-  if (delta === 0) return "±0";
+export function fmtDelta(delta: number): string {
+  if (delta === 0 || Object.is(delta, -0)) return "±0";
   return delta > 0 ? `+${fmt(delta)}` : fmt(delta);
 }
 
 // Format a percentage change
-function fmtPct(pct: number | null): string {
+export function fmtPct(pct: number | null): string {
   if (pct === null) return "— (BASE 0)";
-  if (pct === 0) return "—";
-  return pct > 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`;
+  if (pct === 0 || Object.is(pct, -0)) return "—";
+  const formatted = pct.toFixed(1);
+  if (formatted === "0.0" || formatted === "-0.0") return "—";
+  return pct > 0 ? `+${formatted}%` : `${formatted}%`;
 }
 
 // Trend emoji: regression, improvement, or unchanged
-function trend(delta: number): string {
+export function trend(delta: number): string {
   if (delta > 0) return "🔴";
   if (delta < 0) return "🟢";
   return "⚪";
@@ -340,13 +351,13 @@ function formatTableInlineCode(value: string): string {
     : `${fence}${sanitized}${fence}`;
 }
 
-function benchmarkLabel(fn: BenchmarkIdentity): string {
+export function benchmarkLabel(fn: BenchmarkIdentity): string {
   return fn.case_id === undefined
     ? fn.function_name
     : `${fn.function_name} / ${fn.case_id}`;
 }
 
-function renderFunctionTable(fn: FunctionDiff): string {
+export function renderFunctionTable(fn: FunctionDiff): string {
   const rows = fn.metrics.map((m) => {
     if (m.availability === "unavailable") {
       return `| ⚪ | ${metricLabel(m)} | ${fmt(m.base.consumed)} | ${fmt(m.head.consumed)} | Unavailable | — | ${fmt(m.head.limit)} |`;
@@ -760,5 +771,31 @@ export function renderComment(
   lines.push("");
   lines.push(COMMENT_MARKER);
 
-  return lines.join("\n");
+  const body = lines.join("\n");
+
+  // Truncate if the comment exceeds the safe limit
+  if (body.length > MAX_COMMENT_LENGTH) {
+    // Ensure we preserve the COMMENT_MARKER by putting it at the end of the truncated content
+    const markerIndex = body.lastIndexOf(COMMENT_MARKER);
+    const availableLength =
+      MAX_COMMENT_LENGTH - TRUNCATION_NOTICE.length - COMMENT_MARKER.length - 1; // -1 for newline
+
+    let truncated: string;
+    if (markerIndex > 0 && markerIndex <= availableLength) {
+      // Marker fits within the available space, truncate before it
+      truncated = body.slice(0, markerIndex);
+    } else {
+      // Marker doesn't fit or is too late, just truncate at available length
+      truncated = body.slice(0, availableLength);
+      // Find the last complete line to avoid cutting mid-line
+      const lastNewline = truncated.lastIndexOf("\n");
+      if (lastNewline > 0) {
+        truncated = truncated.slice(0, lastNewline);
+      }
+    }
+
+    return truncated + "\n" + COMMENT_MARKER + TRUNCATION_NOTICE;
+  }
+
+  return body;
 }

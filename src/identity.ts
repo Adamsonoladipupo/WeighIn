@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import * as path from "path";
 import { ZodError } from "zod";
 import type { FixturesSpec, ContractSpec, InvocationSpec } from "./measurement";
@@ -38,6 +40,60 @@ function canonical(value: any): any {
     );
   }
   return value;
+}
+
+function isTypedArgNode(
+  value: unknown,
+): value is { type: string; value: unknown } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { type?: unknown }).type === "string" &&
+    "value" in value
+  );
+}
+
+function canonicalArgValue(type: string, value: any): any {
+  if (type === "vec" && Array.isArray(value)) {
+    return value.map((item) =>
+      isTypedArgNode(item) ? canonicalArg(item) : canonical(item),
+    );
+  }
+  if (type === "map" && Array.isArray(value)) {
+    return value.map((entry) => {
+      if (
+        entry !== null &&
+        typeof entry === "object" &&
+        !Array.isArray(entry)
+      ) {
+        return Object.fromEntries(
+          Object.keys(entry)
+            .sort()
+            .map((key) => [
+              key,
+              (key === "key" || key === "value") && isTypedArgNode(entry[key])
+                ? canonicalArg(entry[key])
+                : canonical(entry[key]),
+            ]),
+        );
+      }
+      return canonical(entry);
+    });
+  }
+  return canonical(value);
+}
+
+/** Canonicalize an invocation argument for fallback case identity using the
+ *  same recursive type-name lowercasing semantics as `toScVal`, without
+ *  altering string payload contents or unrelated objects.
+ */
+export function canonicalArg(arg: any): any {
+  if ("binding" in arg) {
+    return { type: arg.type.toLowerCase(), binding: canonical(arg.binding) };
+  }
+  const type = arg.type.toLowerCase();
+  return { type, value: canonicalArgValue(type, arg.value) };
 }
 
 /** Resolve logical identities before any deployment or simulation side effects.
@@ -90,11 +146,7 @@ export function parseFixtures(
     const invocations = contract.invocations.map((invocation) => {
       // A bound argument is identified by its declared reference, never by the
       // runtime value it resolves to, so case identity survives redeployment.
-      const args = invocation.args.map((arg) =>
-        "binding" in arg
-          ? { type: arg.type.toLowerCase(), binding: canonical(arg.binding) }
-          : { type: arg.type.toLowerCase(), value: canonical(arg.value) },
-      );
+      const args = invocation.args.map((arg) => canonicalArg(arg));
       const case_id =
         invocation.id === undefined
           ? `args:${JSON.stringify(args)}`
