@@ -459,7 +459,11 @@ describe("renderComment", () => {
                 },
                 {
                   key: "memory_bytes",
-                  base: { consumed: null, limit: null, reason: adversarialText },
+                  base: {
+                    consumed: null,
+                    limit: null,
+                    reason: adversarialText,
+                  },
                   head: {
                     consumed: null,
                     limit: null,
