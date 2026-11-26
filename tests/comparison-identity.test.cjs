@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { StrKey } = require("@stellar/stellar-sdk");
-const { parseFixtures } = require("../dist/identity");
+const { parseFixtures, canonicalArg } = require("../dist/identity");
 const { diffBenchmarks } = require("../dist/diff");
 const { enforceThresholds } = require("../dist/threshold");
 const { renderComment } = require("../dist/comment");
@@ -519,4 +519,237 @@ test("vec and map payloads with valid typed-argument contents parse successfully
   });
   const mapResult = parseFixtures(mapFixture, "weighin-fixtures.json");
   assert.ok(mapResult.contracts[0], "map fixture should parse to a contract");
+});
+
+// ---------------------------------------------------------------------------
+// Nested type-name normalization in fallback case identity
+// ---------------------------------------------------------------------------
+
+test("equivalent nested vec and map type capitalizations pair in fallback case identity", () => {
+  const upper = fixture([
+    {
+      function_name: "complex",
+      args: [
+        {
+          type: "Vec",
+          value: [
+            { type: "U32", value: 1 },
+            {
+              type: "MAP",
+              value: [
+                {
+                  key: { type: "Symbol", value: "Alpha" },
+                  value: {
+                    type: "VEC",
+                    value: [{ type: "String", value: "Symbol" }],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+
+  const lower = fixture([
+    {
+      function_name: "complex",
+      args: [
+        {
+          type: "vec",
+          value: [
+            { value: 1, type: "u32" },
+            {
+              type: "map",
+              value: [
+                {
+                  value: {
+                    type: "vec",
+                    value: [{ type: "string", value: "Symbol" }],
+                  },
+                  key: { type: "symbol", value: "Alpha" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+
+  const base = measurement(upper);
+  const head = measurement(lower, { address: headAddress, hash: headHash });
+  assert.equal(base[0].benchmarks[0].case_id, head[0].benchmarks[0].case_id);
+  const diff = diffBenchmarks(base, head);
+  assert.equal(diff.contracts[0].functions.length, 1);
+  assert.deepEqual(diff.contracts[0].newBenchmarks, []);
+  assert.deepEqual(diff.contracts[0].removedBenchmarks, []);
+});
+
+test("nested type normalization preserves string payloads and unrelated objects and keeps distinct values separate", () => {
+  const first = fixture([
+    {
+      function_name: "complex",
+      args: [
+        {
+          type: "Vec",
+          value: [{ type: "String", value: "HelloWorld" }],
+        },
+      ],
+    },
+  ]);
+  const second = fixture([
+    {
+      function_name: "complex",
+      args: [
+        {
+          type: "vec",
+          value: [{ type: "string", value: "helloworld" }],
+        },
+      ],
+    },
+  ]);
+
+  const base = measurement(first);
+  const head = measurement(second, { address: headAddress, hash: headHash });
+  assert.notEqual(base[0].benchmarks[0].case_id, head[0].benchmarks[0].case_id);
+  const diff = diffBenchmarks(base, head);
+  assert.equal(diff.contracts[0].functions.length, 0);
+  assert.equal(diff.contracts[0].newBenchmarks.length, 1);
+  assert.equal(diff.contracts[0].removedBenchmarks.length, 1);
+
+  // Direct canonicalArg check: string payloads and unrelated objects are untouched.
+  assert.deepEqual(
+    canonicalArg({
+      type: "String",
+      value: '{"type":"Symbol","value":"KeepCase"}',
+    }),
+    {
+      type: "string",
+      value: '{"type":"Symbol","value":"KeepCase"}',
+    },
+  );
+  assert.deepEqual(
+    canonicalArg({
+      type: "Symbol",
+      binding: { contract: "MyContract", select: [{ field: "TypeName" }] },
+    }),
+    {
+      type: "symbol",
+      binding: { contract: "MyContract", select: [{ field: "TypeName" }] },
+    },
+  );
+  assert.deepEqual(
+    canonicalArg({
+      type: "Custom",
+      value: { type: "KeepMe", value: "Untouched" },
+    }),
+    {
+      type: "custom",
+      value: { type: "KeepMe", value: "Untouched" },
+    },
+  );
+});
+
+test("duplicate fallback cases differing only in nested type capitalization are rejected", () => {
+  const dupVec = fixture([
+    {
+      function_name: "complex",
+      args: [{ type: "Vec", value: [{ type: "U32", value: 7 }] }],
+    },
+    {
+      function_name: "complex",
+      args: [{ type: "vec", value: [{ type: "u32", value: 7 }] }],
+    },
+  ]);
+  assert.throws(() => measurement(dupVec), /Duplicate benchmark identity/);
+
+  const dupMap = fixture([
+    {
+      function_name: "complex",
+      args: [
+        {
+          type: "Map",
+          value: [
+            {
+              key: { type: "Symbol", value: "k" },
+              value: { type: "String", value: "V" },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      function_name: "complex",
+      args: [
+        {
+          type: "map",
+          value: [
+            {
+              key: { type: "symbol", value: "k" },
+              value: { type: "string", value: "V" },
+            },
+          ],
+        },
+      ],
+    },
+  ]);
+  assert.throws(() => measurement(dupMap), /Duplicate benchmark identity/);
+});
+
+test("invalid nested vec/map argument nodes are rejected fail-closed", () => {
+  assert.throws(
+    () =>
+      measurement(
+        fixture([
+          {
+            function_name: "complex",
+            args: [{ type: "Vec", value: [{ type: "UNKNOWN", value: 1 }] }],
+          },
+        ]),
+      ),
+    /Invalid option/,
+  );
+
+  assert.throws(
+    () =>
+      measurement(
+        fixture([
+          {
+            function_name: "complex",
+            args: [
+              {
+                type: "Map",
+                value: [{ key: { type: "Symbol", value: "only-key" } }],
+              },
+            ],
+          },
+        ]),
+      ),
+    /map entries must have key and value/,
+  );
+
+  assert.throws(
+    () =>
+      measurement(
+        fixture([
+          {
+            function_name: "complex",
+            args: [
+              {
+                type: "Map",
+                value: [
+                  {
+                    key: { type: "Symbol", value: "k" },
+                    value: { type: "NOPE", value: "v" },
+                  },
+                ],
+              },
+            ],
+          },
+        ]),
+      ),
+    /Invalid option/,
+  );
 });

@@ -21,7 +21,7 @@
     },
     {
       "path": "native/simulation/Cargo.lock",
-      "sha256": "4e8dbe9f2964a53fdf7aebc5f8de27f81a427e165c9e81a7d6565d22f821d22f"
+      "sha256": "5a5db79990e64417ebc4a1f3a686987326f35ef93420bc94471e0b9b6cb94432"
     },
     {
       "path": "native/simulation/Cargo.toml",
@@ -29,7 +29,7 @@
     },
     {
       "path": "native/simulation/src/main.rs",
-      "sha256": "ca7af818f409ab160148f500e07f4fa67dd6c1c6107cd061c3fa8a8bf4a64def"
+      "sha256": "7e90f35219ad57e714bb404ddd0d08674212010e5f19b9768d75b3d040291b29"
     },
     {
       "path": "package-lock.json",
